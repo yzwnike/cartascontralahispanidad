@@ -43,8 +43,14 @@ CREATE TABLE IF NOT EXISTS cunadometro_rooms (
   status varchar(20) NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'playing', 'finished')),
   round_number integer NOT NULL DEFAULT 0,
   rounds_limit integer NOT NULL DEFAULT 10 CHECK (rounds_limit IN (5, 10, 20)),
+  game_stage varchar(30) NOT NULL DEFAULT 'lobby',
   created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE cunadometro_rooms
+  ADD COLUMN IF NOT EXISTS game_stage varchar(30) NOT NULL DEFAULT 'legacy';
+UPDATE cunadometro_rooms SET game_stage = 'lobby' WHERE status = 'waiting' AND game_stage = 'legacy';
+ALTER TABLE cunadometro_rooms ALTER COLUMN game_stage SET DEFAULT 'lobby';
 
 CREATE TABLE IF NOT EXISTS cunadometro_players (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -61,11 +67,26 @@ CREATE TABLE IF NOT EXISTS cunadometro_rounds (
   room_id uuid NOT NULL REFERENCES cunadometro_rooms(id) ON DELETE CASCADE,
   round_number integer NOT NULL,
   mode varchar(20) NOT NULL CHECK (mode IN ('duel', 'all_play')),
+  phase varchar(30) NOT NULL DEFAULT 'legacy',
   prompt_text text NOT NULL,
   status varchar(20) NOT NULL DEFAULT 'answering' CHECK (status IN ('answering', 'voting', 'resolved')),
   duel_player_ids uuid[] NOT NULL DEFAULT '{}'::uuid[],
+  reveal_started_at timestamptz,
   created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (room_id, round_number)
+);
+
+ALTER TABLE cunadometro_rounds
+  ADD COLUMN IF NOT EXISTS phase varchar(30) NOT NULL DEFAULT 'legacy',
+  ADD COLUMN IF NOT EXISTS reveal_started_at timestamptz;
+
+CREATE TABLE IF NOT EXISTS cunadometro_prompts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  mode varchar(20) NOT NULL CHECK (mode IN ('duel', 'all_play')),
+  prompt_text text NOT NULL,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (mode, prompt_text)
 );
 
 CREATE TABLE IF NOT EXISTS cunadometro_answers (
@@ -95,6 +116,8 @@ CREATE INDEX IF NOT EXISTS cunadometro_answers_round_idx
   ON cunadometro_answers (room_id, round_number, created_at);
 CREATE INDEX IF NOT EXISTS cunadometro_votes_round_idx
   ON cunadometro_votes (room_id, round_number, answer_id);
+CREATE INDEX IF NOT EXISTS cunadometro_prompts_mode_idx
+  ON cunadometro_prompts (mode, is_active);
 
 INSERT INTO room_player_white_cards (room_id, player_id, card_key, card_text)
 SELECT room_id, player_id, lower(btrim(card_text)), card_text

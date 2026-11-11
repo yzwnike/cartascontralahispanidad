@@ -6,10 +6,10 @@ import { authenticatePlayer } from '../../../../../lib/player-auth';
 
 export const POST: APIRoute = async ({ params, request }) => {
   try {
-    const { playerId, text } = await readJson(request);
+    const { playerId, text, roundNumber } = await readJson(request);
     if (typeof playerId !== 'string') throw new GameServiceError('Falta el identificador de jugador.');
     authenticatePlayer(request, playerId);
-    return Response.json({ room: await submitCunadometroAnswer(params.code ?? '', playerId, text) });
+    return Response.json({ room: await submitCunadometroAnswer(params.code ?? '', playerId, text, roundNumber) });
   } catch (error) {
     return apiError(error);
   }

@@ -2,15 +2,25 @@ import { randomInt, randomUUID } from 'node:crypto';
 import type { TransactionSql } from 'postgres';
 import { getDb } from './db';
 import { GameServiceError } from './game-errors';
-import type { CunadometroMode, CunadometroRoom } from './cunadometro';
-import { cunadometroPrompts } from './cunadometro-prompts';
+import type { CunadometroMode, CunadometroPhase, CunadometroRoom, CunadometroStage } from './cunadometro';
 import { createPlayerToken } from './player-auth';
+import { totalGameRounds, type GameLength } from './cunadometro-length';
+import { createGameSchedule } from './cunadometro-schedule';
 
 const CODE_CHARACTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_PLAYERS = 12;
 
 type RoundPlayer = { id: string; duels_played: number };
 type Transaction = TransactionSql;
+
+function shufflePrompts(prompts: string[]) {
+  const shuffled = [...prompts];
+  for (let index = shuffled.length - 1; index > 0; index--) {
+    const swapIndex = randomInt(index + 1);
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+  return shuffled;
+}
 
 function assertUuid(value: string, label = 'Identificador de jugador') {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
@@ -64,7 +74,13 @@ async function createRound(tx: Transaction, roomId: string, roundNumber: number,
     WHERE room_id = ${roomId} AND mode = ${mode}
   `;
   const used = new Set(usedPrompts.map((row) => row.prompt_text.trim().toLowerCase()));
-  const candidates = cunadometroPrompts[mode].filter((prompt) => !used.has(prompt.trim().toLowerCase()));
+  const promptRows = await tx<Array<{ prompt_text: string }>>`
+    SELECT prompt_text FROM cunadometro_prompts
+    WHERE mode = ${mode} AND is_active = true
+  `;
+  const candidates = promptRows
+    .map((row) => row.prompt_text)
+    .filter((prompt) => !used.has(prompt.trim().toLowerCase()));
   if (candidates.length === 0) throw new GameServiceError('Se han agotado las consignas de esta modalidad.', 503);
   const prompt = candidates[randomInt(candidates.length)];
   let duelPlayerIds: string[] = [];
@@ -160,8 +176,11 @@ export async function getCunadometroRoom(rawCode: string, rawPlayerId: string): 
   assertUuid(rawPlayerId);
   try {
     const db = getDb();
-    const [room] = await db<Array<{ id: string; code: string; status: CunadometroRoom['status']; rounds_limit: 5 | 10 | 20; round_number: number }>>`
-      SELECT id, code, status, rounds_limit, round_number
+    const [room] = await db<Array<{
+      id: string; code: string; status: CunadometroRoom['status']; rounds_limit: GameLength;
+      round_number: number; game_stage: CunadometroStage;
+    }>>`
+      SELECT id, code, status, rounds_limit, round_number, game_stage
       FROM cunadometro_rooms WHERE code = ${code}
     `;
     if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
@@ -182,14 +201,17 @@ export async function getCunadometroRoom(rawCode: string, rawPlayerId: string): 
     }));
 
     if (room.status === 'waiting') {
-      return { id: room.id, code: room.code, status: room.status, roundsLimit: room.rounds_limit, players: publicPlayers, round: null };
+      return {
+        id: room.id, code: room.code, status: room.status, gameLength: room.rounds_limit,
+        gameStage: 'lobby', roundsLimit: room.rounds_limit, players: publicPlayers, round: null,
+      };
     }
 
     const [round] = await db<Array<{
-      round_number: number; mode: CunadometroMode; prompt_text: string; status: 'answering' | 'voting' | 'resolved';
-      duel_player_ids: string[];
+      round_number: number; mode: CunadometroMode; phase: CunadometroPhase; prompt_text: string;
+      status: 'answering' | 'voting' | 'resolved'; duel_player_ids: string[]; reveal_started_at: Date | null;
     }>>`
-      SELECT round_number, mode, prompt_text, status, duel_player_ids
+      SELECT round_number, mode, phase, prompt_text, status, duel_player_ids, reveal_started_at
       FROM cunadometro_rounds
       WHERE room_id = ${room.id} AND round_number = ${room.round_number}
     `;
@@ -210,6 +232,35 @@ export async function getCunadometroRoom(rawCode: string, rawPlayerId: string): 
       `,
     ]);
 
+    const legacy = room.game_stage === 'legacy';
+    const phase: CunadometroPhase = legacy ? 'legacy' : round.phase;
+    const duelTasks = !legacy && (room.game_stage === 'opening_answers' || room.game_stage === 'closing_answers')
+      ? await db<Array<{ round_number: number; prompt_text: string; answer_text: string | null }>>`
+        SELECT r.round_number, r.prompt_text, a.answer_text
+        FROM cunadometro_rounds r
+        JOIN unnest(r.duel_player_ids) AS assigned(player_id) ON assigned.player_id = ${rawPlayerId}::uuid
+        LEFT JOIN cunadometro_answers a
+          ON a.room_id = r.room_id AND a.round_number = r.round_number AND a.player_id = ${rawPlayerId}::uuid
+        WHERE r.room_id = ${room.id}
+          AND r.phase = ${room.game_stage === 'opening_answers' ? 'opening_duels' : 'closing_duels'}
+        ORDER BY r.round_number
+      `
+      : [];
+    const phaseAnswers = !legacy && (room.game_stage === 'opening_answers' || room.game_stage === 'closing_answers')
+      ? await db<Array<{ count: number }>>`
+        SELECT count(*)::int AS count FROM cunadometro_answers a
+        JOIN cunadometro_rounds r ON r.room_id = a.room_id AND r.round_number = a.round_number
+        WHERE a.room_id = ${room.id}
+          AND r.phase = ${room.game_stage === 'opening_answers' ? 'opening_duels' : 'closing_duels'}
+      `
+      : [];
+    const phaseRounds = !legacy && (room.game_stage === 'opening_answers' || room.game_stage === 'closing_answers')
+      ? await db<Array<{ count: number }>>`
+        SELECT count(*)::int AS count FROM cunadometro_rounds
+        WHERE room_id = ${room.id}
+          AND phase = ${room.game_stage === 'opening_answers' ? 'opening_duels' : 'closing_duels'}
+      `
+      : [];
     const duelPlayerIds = round.duel_player_ids ?? [];
     const eligibleVoterCount = round.mode === 'duel'
       ? players.length - duelPlayerIds.length
@@ -227,15 +278,19 @@ export async function getCunadometroRoom(rawCode: string, rawPlayerId: string): 
       id: room.id,
       code: room.code,
       status: room.status,
-      roundsLimit: room.rounds_limit,
+      gameLength: room.rounds_limit,
+      gameStage: room.game_stage,
+      roundsLimit: legacy ? room.rounds_limit : totalGameRounds(room.rounds_limit, players.length),
       players: publicPlayers,
       round: {
         number: round.round_number,
         mode: round.mode,
+        phase,
         prompt: round.prompt_text,
         status: round.status,
         duelPlayerIds,
-        answers: allAnswersIn
+        revealStartedAt: round.reveal_started_at?.toISOString() ?? null,
+        answers: allAnswersIn && round.status !== 'answering'
           ? answers.map((answer) => ({
               id: answer.id,
               playerId: round.status === 'resolved' ? answer.player_id : null,
@@ -246,6 +301,13 @@ export async function getCunadometroRoom(rawCode: string, rawPlayerId: string): 
         submittedCount: answers.length,
         eligibleVoterCount,
         votesSubmittedCount: votes.length,
+        myDuelTasks: duelTasks.map((task) => ({
+          number: task.round_number,
+          prompt: task.prompt_text,
+          answerText: task.answer_text,
+        })),
+        phaseSubmittedCount: phaseAnswers[0]?.count ?? 0,
+        phaseExpectedCount: (phaseRounds[0]?.count ?? 0) * 2,
         myAnswerId: answers.find((answer) => answer.player_id === rawPlayerId)?.id ?? null,
         myVoteId: votes.find((vote) => vote.voter_player_id === rawPlayerId)?.answer_id ?? null,
         votesRevealed,
@@ -265,7 +327,7 @@ export async function startCunadometroRoom(rawCode: string, rawPlayerId: string,
   const code = cleanCode(rawCode);
   assertUuid(rawPlayerId);
   if (rawRoundsLimit !== 5 && rawRoundsLimit !== 10 && rawRoundsLimit !== 20) {
-    throw new GameServiceError('Elige una partida de 5, 10 o 20 rondas.');
+    throw new GameServiceError('Elige una partida rápida, media o larga.');
   }
   try {
     await getDb().begin(async (tx) => {
@@ -284,12 +346,55 @@ export async function startCunadometroRoom(rawCode: string, rawPlayerId: string,
         WHERE room_id = ${room.id} ORDER BY created_at, id
       `;
       if (players.length < 3) throw new GameServiceError('Para jugar hace falta un mínimo de 3 personas.', 409);
+
+      const gameLength = rawRoundsLimit as GameLength;
+      const schedule = createGameSchedule(players.map((player) => player.id), gameLength);
+      const usedPrompts = await tx<Array<{ prompt_text: string }>>`
+        SELECT prompt_text FROM cunadometro_rounds WHERE room_id = ${room.id}
+      `;
+      const used = new Set(usedPrompts.map((row) => row.prompt_text.trim().toLowerCase()));
+      const promptRows = await tx<Array<{ mode: CunadometroMode; prompt_text: string }>>`
+        SELECT mode, prompt_text FROM cunadometro_prompts WHERE is_active = true
+      `;
+      const promptPool = {
+        duel: promptRows
+          .filter((row) => row.mode === 'duel' && !used.has(row.prompt_text.trim().toLowerCase()))
+          .map((row) => row.prompt_text),
+        all_play: promptRows
+          .filter((row) => row.mode === 'all_play' && !used.has(row.prompt_text.trim().toLowerCase()))
+          .map((row) => row.prompt_text),
+      };
+      const required = {
+        duel: schedule.filter((entry) => entry.mode === 'duel').length,
+        all_play: schedule.filter((entry) => entry.mode === 'all_play').length,
+      };
+      if (promptPool.duel.length < required.duel || promptPool.all_play.length < required.all_play) {
+        throw new GameServiceError('No hay suficientes consignas distintas para esa duración. Elige una partida más corta.', 409);
+      }
+
+      const shuffledPrompts = {
+        duel: shufflePrompts(promptPool.duel),
+        all_play: shufflePrompts(promptPool.all_play),
+      };
       await tx`
         UPDATE cunadometro_rooms
-        SET status = 'playing', round_number = 1, rounds_limit = ${rawRoundsLimit}
+        SET status = 'playing', game_stage = 'opening_answers', round_number = 1, rounds_limit = ${rawRoundsLimit}
         WHERE id = ${room.id}
       `;
-      await createRound(tx, room.id, 1, players);
+      const promptOffsets = { duel: 0, all_play: 0 };
+      for (const [index, entry] of schedule.entries()) {
+        const prompt = shuffledPrompts[entry.mode][promptOffsets[entry.mode]++];
+        await tx`
+          INSERT INTO cunadometro_rounds
+            (room_id, round_number, mode, phase, prompt_text, status, duel_player_ids)
+          VALUES
+            (${room.id}, ${index + 1}, ${entry.mode}, ${entry.phase}, ${prompt}, 'answering', ${entry.duelPlayerIds}::uuid[])
+        `;
+      }
+      await tx`
+        UPDATE cunadometro_players SET duels_played = ${schedule.filter((entry) => entry.mode === 'duel').length * 2 / players.length}
+        WHERE room_id = ${room.id}
+      `;
     });
     return getCunadometroRoom(code, rawPlayerId);
   } catch (error) {
@@ -297,44 +402,97 @@ export async function startCunadometroRoom(rawCode: string, rawPlayerId: string,
   }
 }
 
-export async function submitCunadometroAnswer(rawCode: string, rawPlayerId: string, rawText: unknown) {
+export async function submitCunadometroAnswer(
+  rawCode: string,
+  rawPlayerId: string,
+  rawText: unknown,
+  rawRoundNumber?: unknown,
+) {
   const code = cleanCode(rawCode);
   assertUuid(rawPlayerId);
   const text = cleanAnswer(rawText);
+  if (rawRoundNumber !== undefined && (typeof rawRoundNumber !== 'number' || !Number.isInteger(rawRoundNumber) || rawRoundNumber < 1)) {
+    throw new GameServiceError('Número de ronda no válido.');
+  }
   try {
     await getDb().begin(async (tx) => {
-      const [room] = await tx<Array<{ id: string; status: string; round_number: number }>>`
-        SELECT id, status, round_number FROM cunadometro_rooms WHERE code = ${code} FOR UPDATE
+      const [room] = await tx<Array<{ id: string; status: string; round_number: number; game_stage: CunadometroStage }>>`
+        SELECT id, status, round_number, game_stage FROM cunadometro_rooms WHERE code = ${code} FOR UPDATE
       `;
       if (!room || room.status !== 'playing') throw new GameServiceError('Esta partida no acepta respuestas.', room ? 409 : 404);
-      const [round] = await tx<Array<{ mode: CunadometroMode; status: string; duel_player_ids: string[] }>>`
-        SELECT mode, status, duel_player_ids FROM cunadometro_rounds
-        WHERE room_id = ${room.id} AND round_number = ${room.round_number} FOR UPDATE
+      const roundNumber = rawRoundNumber === undefined ? room.round_number : Number(rawRoundNumber);
+      const [round] = await tx<Array<{
+        mode: CunadometroMode; phase: CunadometroPhase; status: string; duel_player_ids: string[];
+      }>>`
+        SELECT mode, phase, status, duel_player_ids FROM cunadometro_rounds
+        WHERE room_id = ${room.id} AND round_number = ${roundNumber} FOR UPDATE
       `;
       if (!round || round.status !== 'answering') throw new GameServiceError('La fase de respuestas ya se ha cerrado.', 409);
+      if (room.game_stage === 'legacy' && roundNumber !== room.round_number) {
+        throw new GameServiceError('La fase de respuestas ya se ha cerrado.', 409);
+      }
       const [player] = await tx<Array<{ id: string }>>`
         SELECT id FROM cunadometro_players WHERE room_id = ${room.id} AND id = ${rawPlayerId}
       `;
       if (!player) throw new GameServiceError('No formas parte de esta sala.', 403);
       if (round.mode === 'duel' && !round.duel_player_ids.includes(rawPlayerId)) {
-        throw new GameServiceError('Esta ronda es un duelo: esta vez te toca votar.', 409);
+        throw new GameServiceError('Este duelo no te corresponde.', 409);
+      }
+      if (room.game_stage === 'opening_answers' && round.phase !== 'opening_duels') {
+        throw new GameServiceError('Aún no se ha abierto esta fase de duelos.', 409);
+      }
+      if (room.game_stage === 'closing_answers' && round.phase !== 'closing_duels') {
+        throw new GameServiceError('Aún no se ha abierto esta fase de duelos.', 409);
+      }
+      if (
+        ['opening_reveal', 'middle_ranking', 'closing_reveal', 'final_ranking', 'lobby'].includes(room.game_stage)
+        || (round.mode === 'all_play' && roundNumber !== room.round_number)
+        || (round.mode === 'all_play' && !['middle_general', 'final_general', 'legacy'].includes(room.game_stage))
+        || (round.mode === 'duel' && !['opening_answers', 'closing_answers', 'legacy'].includes(room.game_stage))
+      ) {
+        throw new GameServiceError('Esta fase no está aceptando respuestas.', 409);
       }
       await tx`
         INSERT INTO cunadometro_answers (room_id, round_number, player_id, answer_text)
-        VALUES (${room.id}, ${room.round_number}, ${rawPlayerId}, ${text})
+        VALUES (${room.id}, ${roundNumber}, ${rawPlayerId}, ${text})
       `;
-      const expected = round.mode === 'duel' ? round.duel_player_ids.length : (await tx<Array<{ count: number }>>`
-        SELECT count(*)::int AS count FROM cunadometro_players WHERE room_id = ${room.id}
-      `)[0].count;
-      const [count] = await tx<Array<{ count: number }>>`
-        SELECT count(*)::int AS count FROM cunadometro_answers
-        WHERE room_id = ${room.id} AND round_number = ${room.round_number}
-      `;
-      if (count.count === expected) {
-        await tx`
-          UPDATE cunadometro_rounds SET status = 'voting'
-          WHERE room_id = ${room.id} AND round_number = ${room.round_number}
+      if (round.phase === 'opening_duels' || round.phase === 'closing_duels') {
+        const [phaseCounts] = await tx<Array<{ answer_count: number; expected_count: number; first_round: number }>>`
+          SELECT
+            (SELECT count(*)::int FROM cunadometro_answers a
+              JOIN cunadometro_rounds r ON r.room_id = a.room_id AND r.round_number = a.round_number
+              WHERE a.room_id = ${room.id} AND r.phase = ${round.phase}) AS answer_count,
+            (SELECT count(*)::int * 2 FROM cunadometro_rounds
+              WHERE room_id = ${room.id} AND phase = ${round.phase}) AS expected_count,
+            (SELECT min(round_number)::int FROM cunadometro_rounds
+              WHERE room_id = ${room.id} AND phase = ${round.phase}) AS first_round
         `;
+        if (phaseCounts.answer_count === phaseCounts.expected_count) {
+          const nextStage = round.phase === 'opening_duels' ? 'opening_reveal' : 'closing_reveal';
+          await tx`
+            UPDATE cunadometro_rounds SET status = 'voting', reveal_started_at = now()
+            WHERE room_id = ${room.id} AND round_number = ${phaseCounts.first_round}
+          `;
+          await tx`
+            UPDATE cunadometro_rooms
+            SET game_stage = ${nextStage}, round_number = ${phaseCounts.first_round}
+            WHERE id = ${room.id}
+          `;
+        }
+      } else {
+        const [count] = await tx<Array<{ count: number }>>`
+          SELECT count(*)::int AS count FROM cunadometro_answers
+          WHERE room_id = ${room.id} AND round_number = ${roundNumber}
+        `;
+        const expected = round.mode === 'duel' ? round.duel_player_ids.length : (await tx<Array<{ count: number }>>`
+          SELECT count(*)::int AS count FROM cunadometro_players WHERE room_id = ${room.id}
+        `)[0].count;
+        if (count.count === expected) {
+          await tx`
+            UPDATE cunadometro_rounds SET status = 'voting', reveal_started_at = now()
+            WHERE room_id = ${room.id} AND round_number = ${roundNumber}
+          `;
+        }
       }
     });
     return getCunadometroRoom(code, rawPlayerId);
@@ -349,15 +507,27 @@ export async function voteCunadometroAnswer(rawCode: string, rawPlayerId: string
   assertUuid(rawAnswerId, 'Identificador de respuesta');
   try {
     await getDb().begin(async (tx) => {
-      const [room] = await tx<Array<{ id: string; status: string; round_number: number }>>`
-        SELECT id, status, round_number FROM cunadometro_rooms WHERE code = ${code} FOR UPDATE
+      const [room] = await tx<Array<{ id: string; status: string; round_number: number; game_stage: CunadometroStage }>>`
+        SELECT id, status, round_number, game_stage FROM cunadometro_rooms WHERE code = ${code} FOR UPDATE
       `;
       if (!room || room.status !== 'playing') throw new GameServiceError('La partida no está en votación.', room ? 409 : 404);
-      const [round] = await tx<Array<{ mode: CunadometroMode; status: string; duel_player_ids: string[] }>>`
-        SELECT mode, status, duel_player_ids FROM cunadometro_rounds
+      const [round] = await tx<Array<{
+        mode: CunadometroMode; phase: CunadometroPhase; status: string;
+        duel_player_ids: string[]; reveal_started_at: Date | null;
+      }>>`
+        SELECT mode, phase, status, duel_player_ids, reveal_started_at FROM cunadometro_rounds
         WHERE room_id = ${room.id} AND round_number = ${room.round_number} FOR UPDATE
       `;
       if (!round || round.status !== 'voting') throw new GameServiceError('Aún no se puede votar.', 409);
+      if (round.reveal_started_at && room.game_stage !== 'legacy') {
+        const [answerCount] = await tx<Array<{ count: number }>>`
+          SELECT count(*)::int AS count FROM cunadometro_answers
+          WHERE room_id = ${room.id} AND round_number = ${room.round_number}
+        `;
+        const revealDelay = round.mode === 'duel' ? 6100 : Math.max(1500, answerCount.count * 180 + 900);
+        const elapsed = Date.now() - new Date(round.reveal_started_at).getTime();
+        if (elapsed < revealDelay) throw new GameServiceError('Espera a que se revelen todas las respuestas.', 409);
+      }
       const [voter] = await tx<Array<{ id: string }>>`
         SELECT id FROM cunadometro_players WHERE room_id = ${room.id} AND id = ${rawPlayerId}
       `;
@@ -408,6 +578,14 @@ export async function voteCunadometroAnswer(rawCode: string, rawPlayerId: string
         UPDATE cunadometro_rounds SET status = 'resolved'
         WHERE room_id = ${room.id} AND round_number = ${room.round_number}
       `;
+      if (round.phase === 'middle_general') {
+        await tx`UPDATE cunadometro_rooms SET game_stage = 'middle_ranking' WHERE id = ${room.id}`;
+      } else if (round.phase === 'final_general') {
+        await tx`
+          UPDATE cunadometro_rooms SET game_stage = 'final_ranking', status = 'finished'
+          WHERE id = ${room.id}
+        `;
+      }
     });
     return getCunadometroRoom(code, rawPlayerId);
   } catch (error) {
@@ -420,21 +598,73 @@ export async function nextCunadometroRound(rawCode: string, rawPlayerId: string)
   assertUuid(rawPlayerId);
   try {
     await getDb().begin(async (tx) => {
-      const [room] = await tx<Array<{ id: string; status: string; round_number: number; rounds_limit: number }>>`
-        SELECT id, status, round_number, rounds_limit
+      const [room] = await tx<Array<{
+        id: string; status: string; round_number: number; rounds_limit: number; game_stage: CunadometroStage;
+      }>>`
+        SELECT id, status, round_number, rounds_limit, game_stage
         FROM cunadometro_rooms WHERE code = ${code} FOR UPDATE
       `;
       if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
-      const [player] = await tx<Array<{ id: string }>>`
-        SELECT id FROM cunadometro_players WHERE id = ${rawPlayerId} AND room_id = ${room.id}
+      const [player] = await tx<Array<{ is_host: boolean }>>`
+        SELECT is_host FROM cunadometro_players WHERE id = ${rawPlayerId} AND room_id = ${room.id}
       `;
       if (!player) throw new GameServiceError('No formas parte de esta sala.', 403);
+      if (!player.is_host) throw new GameServiceError('Solo el anfitrión puede avanzar la partida.', 403);
       if (room.status !== 'playing') throw new GameServiceError('Esta partida ya está cerrada.', 409);
+      if (room.game_stage === 'middle_ranking') {
+        const [firstClosingDuel] = await tx<Array<{ round_number: number }>>`
+          SELECT round_number FROM cunadometro_rounds
+          WHERE room_id = ${room.id} AND phase = 'closing_duels'
+          ORDER BY round_number LIMIT 1
+        `;
+        if (!firstClosingDuel) throw new GameServiceError('No encontramos la segunda fase de duelos.', 500);
+        await tx`
+          UPDATE cunadometro_rooms
+          SET game_stage = 'closing_answers', round_number = ${firstClosingDuel.round_number}
+          WHERE id = ${room.id}
+        `;
+        return;
+      }
       const [round] = await tx<Array<{ status: string }>>`
         SELECT status FROM cunadometro_rounds
         WHERE room_id = ${room.id} AND round_number = ${room.round_number}
       `;
       if (round?.status !== 'resolved') throw new GameServiceError('Primero debe terminar la votación.', 409);
+      if (room.game_stage !== 'legacy') {
+        const [current] = await tx<Array<{ phase: CunadometroPhase }>>`
+          SELECT phase FROM cunadometro_rounds
+          WHERE room_id = ${room.id} AND round_number = ${room.round_number}
+        `;
+        if (current.phase !== 'opening_duels' && current.phase !== 'closing_duels') {
+          throw new GameServiceError('No hay otra ronda de duelos que avanzar.', 409);
+        }
+        const [nextDuel] = await tx<Array<{ round_number: number }>>`
+          SELECT round_number FROM cunadometro_rounds
+          WHERE room_id = ${room.id} AND phase = ${current.phase} AND round_number > ${room.round_number}
+          ORDER BY round_number LIMIT 1
+        `;
+        if (nextDuel) {
+          await tx`
+            UPDATE cunadometro_rounds SET status = 'voting', reveal_started_at = now()
+            WHERE room_id = ${room.id} AND round_number = ${nextDuel.round_number}
+          `;
+          await tx`UPDATE cunadometro_rooms SET round_number = ${nextDuel.round_number} WHERE id = ${room.id}`;
+          return;
+        }
+        const nextPhase = current.phase === 'opening_duels' ? 'middle_general' : 'final_general';
+        const [nextGeneral] = await tx<Array<{ round_number: number }>>`
+          SELECT round_number FROM cunadometro_rounds
+          WHERE room_id = ${room.id} AND phase = ${nextPhase}
+          ORDER BY round_number LIMIT 1
+        `;
+        if (!nextGeneral) throw new GameServiceError('No encontramos la ronda general.', 500);
+        await tx`
+          UPDATE cunadometro_rooms
+          SET game_stage = ${nextPhase}, round_number = ${nextGeneral.round_number}
+          WHERE id = ${room.id}
+        `;
+        return;
+      }
       if (room.round_number >= room.rounds_limit) {
         await tx`UPDATE cunadometro_rooms SET status = 'finished' WHERE id = ${room.id}`;
         return;
