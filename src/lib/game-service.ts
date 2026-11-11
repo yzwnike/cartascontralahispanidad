@@ -275,7 +275,13 @@ export async function createRoom(rawName: unknown): Promise<{ room: GameRoom; pl
           SELECT id FROM cards WHERE type = 'black' ORDER BY random() LIMIT 1
         `;
         const whites = await tx<Array<{ text: string }>>`
-          SELECT text FROM cards WHERE type = 'white' ORDER BY random() LIMIT ${HAND_SIZE}
+          WITH unique_cards AS (
+            SELECT DISTINCT ON (lower(btrim(text))) text
+            FROM cards
+            WHERE type = 'white'
+            ORDER BY lower(btrim(text)), id
+          )
+          SELECT text FROM unique_cards ORDER BY random() LIMIT ${HAND_SIZE}
         `;
         if (!black || whites.length < HAND_SIZE) {
           throw new GameServiceError('Faltan cartas en Neon. Ejecuta db/schema.sql en la base de datos.', 503);
@@ -319,7 +325,13 @@ export async function joinRoom(rawCode: string, rawName: unknown) {
       `;
       if (duplicate?.exists) throw new GameServiceError('Ya hay alguien con ese nombre en la sala.', 409);
       const whites = await tx<Array<{ text: string }>>`
-        SELECT text FROM cards WHERE type = 'white' ORDER BY random() LIMIT ${HAND_SIZE}
+        WITH unique_cards AS (
+          SELECT DISTINCT ON (lower(btrim(text))) text
+          FROM cards
+          WHERE type = 'white'
+          ORDER BY lower(btrim(text)), id
+        )
+        SELECT text FROM unique_cards ORDER BY random() LIMIT ${HAND_SIZE}
       `;
       if (whites.length < HAND_SIZE) {
         throw new GameServiceError('Faltan cartas blancas en Neon. Ejecuta db/schema.sql en la base de datos.', 503);
@@ -471,8 +483,21 @@ export async function startRoom(rawCode: string, rawPlayerId: string, rawRoundsL
         throw new GameServiceError('Falta la carta de respuesta de alguien en la sala.', 409);
       }
       const normalCardsNeeded = players.length * (HAND_SIZE - 1);
+      const customCardKeys = customCards.map((card) => card.card_text.trim().toLowerCase());
       const normalCards = await tx<Array<{ text: string }>>`
-        SELECT text FROM cards WHERE type = 'white' ORDER BY random() LIMIT ${normalCardsNeeded}
+        WITH unique_cards AS (
+          SELECT DISTINCT ON (lower(btrim(card.text))) card.text
+          FROM cards card
+          WHERE card.type = 'white'
+            AND lower(btrim(card.text)) <> ALL(${customCardKeys}::text[])
+            AND NOT EXISTS (
+              SELECT 1 FROM room_player_white_cards history
+              WHERE history.room_id = ${room.id}
+                AND history.card_key = lower(btrim(card.text))
+            )
+          ORDER BY lower(btrim(card.text)), card.id
+        )
+        SELECT text FROM unique_cards ORDER BY random() LIMIT ${normalCardsNeeded}
       `;
       if (normalCards.length < normalCardsNeeded) {
         throw new GameServiceError('No hay suficientes cartas blancas para repartir.', 503);
@@ -490,6 +515,12 @@ export async function startRoom(rawCode: string, rawPlayerId: string, rawRoundsL
         await tx`
           UPDATE players SET hand = ${JSON.stringify(hand)}::jsonb
           WHERE id = ${recipient.id} AND room_id = ${room.id}
+        `;
+        await tx`
+          INSERT INTO room_player_white_cards (room_id, player_id, card_key, card_text)
+          SELECT ${room.id}, ${recipient.id}, lower(btrim(dealt.card_text)), dealt.card_text
+          FROM unnest(${hand}::text[]) AS dealt(card_text)
+          ON CONFLICT DO NOTHING
         `;
       }
       await tx`
@@ -547,15 +578,37 @@ export async function submitCards(rawCode: string, rawPlayerId: string, rawCards
       const needed = Math.max(0, HAND_SIZE - remaining.length);
       const replacements = needed > 0
         ? await tx<Array<{ text: string }>>`
-            SELECT text FROM cards WHERE type = 'white' ORDER BY random() LIMIT ${needed}
+            WITH unique_cards AS (
+              SELECT DISTINCT ON (lower(btrim(card.text))) card.text
+              FROM cards card
+              WHERE card.type = 'white'
+                AND NOT EXISTS (
+                  SELECT 1 FROM room_player_white_cards history
+                  WHERE history.room_id = ${room.id}
+                    AND history.player_id = ${rawPlayerId}
+                    AND history.card_key = lower(btrim(card.text))
+                )
+              ORDER BY lower(btrim(card.text)), card.id
+            )
+            SELECT text FROM unique_cards ORDER BY random() LIMIT ${needed}
           `
         : [];
-      if (replacements.length < needed) throw new GameServiceError('No hay suficientes cartas blancas para reponer tu mano.', 503);
+      if (replacements.length < needed) {
+        throw new GameServiceError('Se han agotado las cartas blancas distintas para tu jugador en esta partida.', 503);
+      }
       await tx`
         UPDATE players
         SET hand = ${JSON.stringify([...remaining, ...replacements.map((card) => card.text)])}::jsonb
         WHERE id = ${rawPlayerId}
       `;
+      if (replacements.length > 0) {
+        await tx`
+          INSERT INTO room_player_white_cards (room_id, player_id, card_key, card_text)
+          SELECT ${room.id}, ${rawPlayerId}, lower(btrim(dealt.card_text)), dealt.card_text
+          FROM unnest(${replacements.map((card) => card.text)}::text[]) AS dealt(card_text)
+          ON CONFLICT DO NOTHING
+        `;
+      }
       for (const card of selected) {
         await tx`
           INSERT INTO played_cards (room_id, player_id, card_text, is_winner, round_number, submission_id)
@@ -625,14 +678,24 @@ export async function rerollCard(rawCode: string, rawPlayerId: string, rawCardIn
       }
 
       const [replacement] = await tx<Array<{ text: string }>>`
-        SELECT card.text
-        FROM cards AS card
-        WHERE card.type = 'white'
-          AND card.text <> ALL(${hand}::text[])
-        ORDER BY random()
-        LIMIT 1
+        WITH unique_cards AS (
+          SELECT DISTINCT ON (lower(btrim(card.text))) card.text
+          FROM cards AS card
+          WHERE card.type = 'white'
+            AND lower(btrim(card.text)) <> ALL(${hand.map((text) => text.trim().toLowerCase())}::text[])
+            AND NOT EXISTS (
+              SELECT 1 FROM room_player_white_cards history
+              WHERE history.room_id = ${room.id}
+                AND history.player_id = ${rawPlayerId}
+                AND history.card_key = lower(btrim(card.text))
+            )
+          ORDER BY lower(btrim(card.text)), card.id
+        )
+        SELECT text FROM unique_cards ORDER BY random() LIMIT 1
       `;
-      if (!replacement) throw new GameServiceError('No hay cartas blancas nuevas disponibles para cambiar.', 503);
+      if (!replacement) {
+        throw new GameServiceError('Se han agotado las cartas blancas distintas para tu jugador en esta partida.', 503);
+      }
 
       await tx`
         INSERT INTO round_card_rerolls (room_id, round_number, player_id)
@@ -642,6 +705,11 @@ export async function rerollCard(rawCode: string, rawPlayerId: string, rawCardIn
       await tx`
         UPDATE players SET hand = ${JSON.stringify(hand)}::jsonb
         WHERE id = ${rawPlayerId} AND room_id = ${room.id}
+      `;
+      await tx`
+        INSERT INTO room_player_white_cards (room_id, player_id, card_key, card_text)
+        VALUES (${room.id}, ${rawPlayerId}, lower(btrim(${replacement.text})), ${replacement.text})
+        ON CONFLICT DO NOTHING
       `;
     });
     return getRoomState(code, rawPlayerId);
@@ -796,12 +864,32 @@ export async function nextRound(rawCode: string, rawPlayerId: string) {
         const needed = Math.max(0, HAND_SIZE - hand.length);
         if (needed === 0) continue;
         const cards = await tx<Array<{ text: string }>>`
-          SELECT text FROM cards WHERE type = 'white' ORDER BY random() LIMIT ${needed}
+          WITH unique_cards AS (
+            SELECT DISTINCT ON (lower(btrim(card.text))) card.text
+            FROM cards card
+            WHERE card.type = 'white'
+              AND NOT EXISTS (
+                SELECT 1 FROM room_player_white_cards history
+                WHERE history.room_id = ${room.id}
+                  AND history.player_id = ${player.id}
+                  AND history.card_key = lower(btrim(card.text))
+              )
+            ORDER BY lower(btrim(card.text)), card.id
+          )
+          SELECT text FROM unique_cards ORDER BY random() LIMIT ${needed}
         `;
-        if (cards.length < needed) throw new GameServiceError('No hay suficientes cartas blancas para repartir.', 503);
+        if (cards.length < needed) {
+          throw new GameServiceError('Se han agotado las cartas blancas distintas para un jugador en esta partida.', 503);
+        }
         await tx`
           UPDATE players SET hand = ${JSON.stringify([...hand, ...cards.map((card) => card.text)])}::jsonb
           WHERE id = ${player.id}
+        `;
+        await tx`
+          INSERT INTO room_player_white_cards (room_id, player_id, card_key, card_text)
+          SELECT ${room.id}, ${player.id}, lower(btrim(dealt.card_text)), dealt.card_text
+          FROM unnest(${cards.map((card) => card.text)}::text[]) AS dealt(card_text)
+          ON CONFLICT DO NOTHING
         `;
       }
       await tx`

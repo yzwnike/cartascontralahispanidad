@@ -28,6 +28,32 @@ CREATE TABLE IF NOT EXISTS round_card_rerolls (
   PRIMARY KEY (room_id, round_number, player_id)
 );
 
+CREATE TABLE IF NOT EXISTS room_player_white_cards (
+  room_id uuid NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  player_id uuid NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  card_key text NOT NULL,
+  card_text text NOT NULL,
+  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (room_id, player_id, card_key)
+);
+
+INSERT INTO room_player_white_cards (room_id, player_id, card_key, card_text)
+SELECT room_id, player_id, lower(btrim(card_text)), card_text
+FROM played_cards
+WHERE card_text IS NOT NULL AND btrim(card_text) <> ''
+ON CONFLICT DO NOTHING;
+
+INSERT INTO room_player_white_cards (room_id, player_id, card_key, card_text)
+SELECT p.room_id, p.id, lower(btrim(held.card_text)), held.card_text
+FROM players p
+JOIN rooms r ON r.id = p.room_id
+CROSS JOIN LATERAL jsonb_array_elements_text(
+  CASE WHEN jsonb_typeof(p.hand) = 'array' THEN p.hand ELSE '[]'::jsonb END
+) AS held(card_text)
+WHERE r.status IN ('playing', 'judging', 'sudden_vote')
+  AND btrim(held.card_text) <> ''
+ON CONFLICT DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS room_custom_cards (
   room_id uuid NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
   player_id uuid NOT NULL REFERENCES players(id) ON DELETE CASCADE,
