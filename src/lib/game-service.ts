@@ -32,6 +32,15 @@ function cleanName(value: unknown): string {
   return value.trim();
 }
 
+function cleanCustomCard(value: unknown): string {
+  if (typeof value !== 'string') throw new GameServiceError('Escribe una carta de respuesta válida.');
+  const text = value.trim().replace(/\s+/g, ' ');
+  if (text.length < 3 || text.length > 160) {
+    throw new GameServiceError('Tu carta debe tener entre 3 y 160 caracteres.');
+  }
+  return text;
+}
+
 function cleanCode(value: string): string {
   const code = value.trim().toUpperCase();
   if (!/^[A-Z2-9]{6}$/.test(code)) throw new GameServiceError('El código de sala debe tener 6 caracteres.');
@@ -97,12 +106,16 @@ export async function getRoomState(rawCode: string, rawPlayerId: string): Promis
     const db = getDb();
     const room = await roomRow(code, db);
     const [players, rows] = await Promise.all([
-      db<Array<{ id: string; name: string; score: number; is_host: boolean; hand: unknown }>>`
-        SELECT id, name, score, is_host,
-               CASE WHEN id = ${rawPlayerId}::uuid THEN hand ELSE '[]'::jsonb END AS hand
-        FROM players
-        WHERE room_id = ${room.id}
-        ORDER BY created_at, id
+      db<Array<{ id: string; name: string; score: number; is_host: boolean; hand: unknown; custom_card_text: string | null; custom_card_submitted: boolean; is_ready: boolean }>>`
+        SELECT p.id, p.name, p.score, p.is_host,
+               CASE WHEN p.id = ${rawPlayerId}::uuid THEN p.hand ELSE '[]'::jsonb END AS hand,
+               CASE WHEN p.id = ${rawPlayerId}::uuid THEN cc.card_text ELSE NULL END AS custom_card_text,
+               (cc.player_id IS NOT NULL) AS custom_card_submitted,
+               COALESCE(cc.is_ready, false) AS is_ready
+        FROM players p
+        LEFT JOIN room_custom_cards cc ON cc.room_id = p.room_id AND cc.player_id = p.id
+        WHERE p.room_id = ${room.id}
+        ORDER BY p.created_at, p.id
       `,
       db<Array<{ submission_id: string; player_id: string; card_text: string; is_winner: boolean }>>`
         SELECT submission_id, player_id, card_text, is_winner
@@ -128,17 +141,18 @@ export async function getRoomState(rawCode: string, rawPlayerId: string): Promis
       grouped.set(row.submission_id, current);
     }
 
-    const voteRows = await db<Array<{ vote_number: number; voter_player_id: string; submission_id: string }>>`
-      SELECT vote_number, voter_player_id, submission_id
-      FROM round_votes
-      WHERE room_id = ${room.id} AND round_number = ${room.round_number}
+    const voteRows = await db<Array<{ vote_number: number; voter_player_id: string; voter_name: string; submission_id: string }>>`
+      SELECT rv.vote_number, rv.voter_player_id, p.name AS voter_name, rv.submission_id
+      FROM round_votes rv
+      JOIN players p ON p.id = rv.voter_player_id
+      WHERE rv.room_id = ${room.id} AND rv.round_number = ${room.round_number}
     `;
     const allResponsesSubmitted = grouped.size === players.length && players.length >= 2;
     const winnerIds = Array.from(new Set(
       Array.from(grouped.values()).filter((item) => item.isWinner).map((item) => item.playerId),
     ));
     const revealed = winnerIds.length > 0;
-    const voteNumber = room.status === 'sudden_vote' ? 2 : 1;
+    const voteNumber = room.status === 'sudden_vote' || voteRows.some((vote) => vote.vote_number === 2) ? 2 : 1;
     const currentVotes = voteRows.filter((vote) => vote.vote_number === voteNumber);
     const firstVoteCounts = new Map<string, number>();
     for (const vote of voteRows.filter((item) => item.vote_number === 1)) {
@@ -159,11 +173,19 @@ export async function getRoomState(rawCode: string, rawPlayerId: string): Promis
     const voteOptions = room.status === 'sudden_vote'
       ? suddenCandidates
       : Array.from(grouped.keys());
-    const voteCounts = revealed
-      ? Object.fromEntries(currentVoteCounts)
-      : room.status === 'sudden_vote'
-        ? Object.fromEntries(firstVoteCounts)
-        : {};
+    const voteCounts = allResponsesSubmitted
+      ? Object.fromEntries(Array.from(grouped.keys(), (submissionId) => [
+          submissionId,
+          currentVoteCounts.get(submissionId) ?? 0,
+        ]))
+      : {};
+    const publicVotes = allResponsesSubmitted
+      ? currentVotes.map((vote) => ({
+          voterId: vote.voter_player_id,
+          voterName: vote.voter_name,
+          submissionId: vote.submission_id,
+        }))
+      : [];
     const submissions: Submission[] = allResponsesSubmitted
       ? Array.from(grouped, ([id, item]) => ({
           id,
@@ -177,7 +199,14 @@ export async function getRoomState(rawCode: string, rawPlayerId: string): Promis
       score: player.score,
       isHost: player.is_host,
       hand: readHand(player.hand),
+      customCardText: player.custom_card_text,
+      customCardSubmitted: player.custom_card_submitted,
+      ready: player.is_ready,
     }));
+    const customCardsSubmitted = gamePlayers.filter((player) => player.customCardSubmitted).length;
+    const allPlayersReady = gamePlayers.length >= 2
+      && customCardsSubmitted === gamePlayers.length
+      && gamePlayers.every((player) => player.ready);
 
     return {
       id: room.id,
@@ -190,6 +219,8 @@ export async function getRoomState(rawCode: string, rawPlayerId: string): Promis
       blackCard: room.black_card,
       pick: room.pick,
       players: gamePlayers,
+      customCardsSubmitted,
+      allPlayersReady,
       submissions,
       submittedCount: grouped.size,
       mySubmissionId: Array.from(grouped).find(([, item]) => item.playerId === rawPlayerId)?.[0] ?? null,
@@ -198,6 +229,7 @@ export async function getRoomState(rawCode: string, rawPlayerId: string): Promis
       myVoteId: currentVotes.find((vote) => vote.voter_player_id === rawPlayerId)?.submission_id ?? null,
       voteOptions,
       voteCounts,
+      publicVotes,
       winnerIds,
       winnerId: winnerIds[0] ?? null,
     };
@@ -280,6 +312,105 @@ export async function joinRoom(rawCode: string, rawName: unknown) {
   }
 }
 
+export async function prepareRoom(rawCode: string, rawHostId: string) {
+  const code = cleanCode(rawCode);
+  assertUuid(rawHostId);
+  try {
+    await getDb().begin(async (tx) => {
+      const [room] = await tx<Array<{ id: string; status: string }>>`
+        SELECT id, status FROM rooms WHERE code = ${code} FOR UPDATE
+      `;
+      if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
+      if (room.status !== 'waiting') throw new GameServiceError('La sala ya está preparando la partida.', 409);
+
+      const [host] = await tx<Array<{ is_host: boolean }>>`
+        SELECT is_host FROM players WHERE id = ${rawHostId} AND room_id = ${room.id}
+      `;
+      if (!host) throw new GameServiceError('No formas parte de esta sala.', 403);
+      if (!host.is_host) throw new GameServiceError('Solo el anfitrión puede abrir la creación de cartas.', 403);
+
+      const [roster] = await tx<Array<{ count: number }>>`
+        SELECT count(*)::int AS count FROM players WHERE room_id = ${room.id}
+      `;
+      if (roster.count < 2) throw new GameServiceError('Hace falta al menos otra persona para jugar.', 409);
+      await tx`UPDATE rooms SET status = 'card_creation' WHERE id = ${room.id}`;
+    });
+    return getRoomState(code, rawHostId);
+  } catch (error) {
+    return normalizeDatabaseError(error);
+  }
+}
+
+export async function submitCustomCard(rawCode: string, rawPlayerId: string, rawCardText: unknown) {
+  const code = cleanCode(rawCode);
+  assertUuid(rawPlayerId);
+  const cardText = cleanCustomCard(rawCardText);
+  try {
+    await getDb().begin(async (tx) => {
+      const [room] = await tx<Array<{ id: string; status: string }>>`
+        SELECT id, status FROM rooms WHERE code = ${code} FOR UPDATE
+      `;
+      if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
+      if (room.status !== 'card_creation') {
+        throw new GameServiceError('La creación de cartas no está abierta.', 409);
+      }
+
+      const [player] = await tx<Array<{ id: string }>>`
+        SELECT id FROM players WHERE id = ${rawPlayerId} AND room_id = ${room.id}
+      `;
+      if (!player) throw new GameServiceError('No formas parte de esta sala.', 403);
+
+      const [duplicate] = await tx<Array<{ exists: boolean }>>`
+        SELECT EXISTS (
+          SELECT 1 FROM room_custom_cards
+          WHERE room_id = ${room.id} AND player_id <> ${rawPlayerId}
+            AND lower(btrim(card_text)) = lower(${cardText})
+        ) AS exists
+      `;
+      if (duplicate?.exists) throw new GameServiceError('Esa carta ya la ha escrito otra persona. Prueba otra.', 409);
+
+      await tx`
+        INSERT INTO room_custom_cards (room_id, player_id, card_text, is_ready)
+        VALUES (${room.id}, ${rawPlayerId}, ${cardText}, false)
+        ON CONFLICT (room_id, player_id)
+        DO UPDATE SET card_text = EXCLUDED.card_text, is_ready = false
+      `;
+    });
+    return getRoomState(code, rawPlayerId);
+  } catch (error) {
+    return normalizeDatabaseError(error);
+  }
+}
+
+export async function setPlayerReady(rawCode: string, rawPlayerId: string, ready: boolean) {
+  const code = cleanCode(rawCode);
+  assertUuid(rawPlayerId);
+  try {
+    await getDb().begin(async (tx) => {
+      const [room] = await tx<Array<{ id: string; status: string }>>`
+        SELECT id, status FROM rooms WHERE code = ${code} FOR UPDATE
+      `;
+      if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
+      if (room.status !== 'card_creation') {
+        throw new GameServiceError('Ya no se puede cambiar el estado de preparación.', 409);
+      }
+
+      const [card] = await tx<Array<{ player_id: string }>>`
+        SELECT player_id FROM room_custom_cards
+        WHERE room_id = ${room.id} AND player_id = ${rawPlayerId}
+      `;
+      if (!card) throw new GameServiceError('Primero escribe y guarda tu carta blanca.', 409);
+      await tx`
+        UPDATE room_custom_cards SET is_ready = ${ready}
+        WHERE room_id = ${room.id} AND player_id = ${rawPlayerId}
+      `;
+    });
+    return getRoomState(code, rawPlayerId);
+  } catch (error) {
+    return normalizeDatabaseError(error);
+  }
+}
+
 export async function startRoom(rawCode: string, rawPlayerId: string, rawRoundsLimit: unknown) {
   const code = cleanCode(rawCode);
   assertUuid(rawPlayerId);
@@ -297,11 +428,47 @@ export async function startRoom(rawCode: string, rawPlayerId: string, rawRoundsL
       `;
       if (!host) throw new GameServiceError('No formas parte de esta sala.', 403);
       if (!host.is_host) throw new GameServiceError('Solo el anfitrión puede empezar la partida.', 403);
-      if (room.status !== 'waiting') throw new GameServiceError('La partida ya ha empezado.', 409);
-      const [roster] = await tx<Array<{ count: number }>>`
-        SELECT count(*)::int AS count FROM players WHERE room_id = ${room.id}
+      if (room.status !== 'card_creation') {
+        throw new GameServiceError('Primero hay que abrir la fase de creación de cartas.', 409);
+      }
+      const players = await tx<Array<{ id: string }>>`
+        SELECT id FROM players WHERE room_id = ${room.id} ORDER BY created_at, id
       `;
-      if (roster.count < 2) throw new GameServiceError('Hace falta al menos otra persona para poder votar.', 409);
+      if (players.length < 2) throw new GameServiceError('Hace falta al menos otra persona para poder votar.', 409);
+      const customCards = await tx<Array<{ player_id: string; card_text: string }>>`
+        SELECT player_id, card_text FROM room_custom_cards
+        WHERE room_id = ${room.id} AND is_ready = true
+      `;
+      if (customCards.length !== players.length) {
+        throw new GameServiceError('Todo el mundo debe escribir una carta y marcar que está listo.', 409);
+      }
+
+      const cardsByAuthor = new Map(customCards.map((card) => [card.player_id, card.card_text]));
+      if (players.some((player) => !cardsByAuthor.has(player.id))) {
+        throw new GameServiceError('Falta la carta de respuesta de alguien en la sala.', 409);
+      }
+      const normalCardsNeeded = players.length * (HAND_SIZE - 1);
+      const normalCards = await tx<Array<{ text: string }>>`
+        SELECT text FROM cards WHERE type = 'white' ORDER BY random() LIMIT ${normalCardsNeeded}
+      `;
+      if (normalCards.length < normalCardsNeeded) {
+        throw new GameServiceError('No hay suficientes cartas blancas para repartir.', 503);
+      }
+
+      const customOffset = randomInt(1, players.length);
+      for (let authorIndex = 0; authorIndex < players.length; authorIndex++) {
+        const author = players[authorIndex];
+        const recipient = players[(authorIndex + customOffset) % players.length];
+        const handStart = authorIndex * (HAND_SIZE - 1);
+        const hand = [
+          ...normalCards.slice(handStart, handStart + HAND_SIZE - 1).map((card) => card.text),
+          cardsByAuthor.get(author.id)!,
+        ];
+        await tx`
+          UPDATE players SET hand = ${JSON.stringify(hand)}::jsonb
+          WHERE id = ${recipient.id} AND room_id = ${room.id}
+        `;
+      }
       await tx`
         UPDATE rooms
         SET status = 'playing', judge_player_id = NULL, round_number = 1, rounds_limit = ${rawRoundsLimit}
@@ -581,6 +748,44 @@ export async function leaveRoom(rawCode: string, rawPlayerId: string) {
         await tx`UPDATE players SET is_host = (id = ${remaining[0].id}) WHERE room_id = ${room.id}`;
       }
     });
+  } catch (error) {
+    return normalizeDatabaseError(error);
+  }
+}
+
+export async function kickPlayer(rawCode: string, rawHostId: string, rawTargetId: string) {
+  const code = cleanCode(rawCode);
+  assertUuid(rawHostId);
+  assertUuid(rawTargetId, 'Identificador del jugador expulsado');
+  if (rawHostId === rawTargetId) {
+    throw new GameServiceError('No puedes expulsarte a ti mismo; usa «Salir de la sala».', 400);
+  }
+
+  try {
+    await getDb().begin(async (tx) => {
+      const [room] = await tx<Array<{ id: string; status: string }>>`
+        SELECT id, status FROM rooms WHERE code = ${code} FOR UPDATE
+      `;
+      if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
+      if (room.status !== 'waiting' && room.status !== 'card_creation') {
+        throw new GameServiceError('Solo puedes expulsar jugadores antes de empezar la partida.', 409);
+      }
+
+      const [host] = await tx<Array<{ is_host: boolean }>>`
+        SELECT is_host FROM players WHERE id = ${rawHostId} AND room_id = ${room.id} FOR UPDATE
+      `;
+      if (!host) throw new GameServiceError('No formas parte de esta sala.', 403);
+      if (!host.is_host) throw new GameServiceError('Solo el anfitrión puede expulsar jugadores.', 403);
+
+      const [target] = await tx<Array<{ id: string; is_host: boolean }>>`
+        SELECT id, is_host FROM players WHERE id = ${rawTargetId} AND room_id = ${room.id} FOR UPDATE
+      `;
+      if (!target) throw new GameServiceError('Ese jugador ya no está en la sala.', 404);
+      if (target.is_host) throw new GameServiceError('No puedes expulsar al anfitrión de la sala.', 403);
+
+      await tx`DELETE FROM players WHERE id = ${rawTargetId} AND room_id = ${room.id}`;
+    });
+    return getRoomState(code, rawHostId);
   } catch (error) {
     return normalizeDatabaseError(error);
   }

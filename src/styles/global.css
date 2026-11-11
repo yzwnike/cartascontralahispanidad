@@ -119,6 +119,17 @@ button:focus-visible, input:focus-visible { outline: 2px solid #06b6d4; outline-
 .submission-number { color: #8d8495; font-size: 7px; letter-spacing: .1em; }
 .submission-card small { color: #7e7184; font-size: 9px; }
 .table-tip { color: #9c91a7; font-size: 10px; }
+.vote-receipts { display: grid; gap: 7px; padding-top: 9px; border-top: 1px solid rgba(37,33,44,.1); }
+.vote-receipts-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.vote-receipts-label { color: #908493; font: 7px 'DM Mono',monospace; letter-spacing: .12em; }
+.vote-receipts-count { color: #8b35b5; font: 700 9px 'DM Mono',monospace; animation: vote-count-pop .32s cubic-bezier(.2,.8,.2,1) both; }
+.vote-receipts-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.vote-receipt { display: inline-flex; min-height: 25px; align-items: center; gap: 5px; padding: 3px 8px 3px 3px; border: 1px solid rgba(139,53,181,.14); border-radius: 999px; color: #473b4b; background: rgba(168,85,247,.08); font-size: 9px; animation: vote-receipt-arrive .48s cubic-bezier(.16,1,.3,1) both; }
+.vote-receipt-avatar { display: grid; width: 18px; height: 18px; flex: 0 0 auto; place-items: center; border: 1px solid rgba(255,255,255,.75); border-radius: 50%; color: #fff; background: #8b5cf6; font-size: 8px; font-weight: 700; box-shadow: 0 0 9px rgba(139,92,246,.3); }
+.vote-receipt-avatar.avatar-1 { background: #0891b2; }
+.vote-receipt-avatar.avatar-2 { background: #db2777; }
+.vote-receipt-avatar.avatar-3 { background: #d97706; }
+.vote-receipts-empty { color: #938a97; font-size: 9px; font-weight: 400; }
 .next-round { margin-top: 13px; }
 .hand-section { padding: 17px 0 3px; border-top: 1px solid #282330; }
 .hand-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
@@ -185,6 +196,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid #06b6d4; outline-
 .waiting-roster .player-list { margin-bottom: 12px; }
 .waiting-roster .player-row { min-height: 52px; animation: player-enter .35s ease both; }
 .roster-check { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; color: #6ee7b7; background: rgba(52,211,153,.12); }
+.kick-player-button { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; margin-left: auto; border: 1px solid rgba(248,113,113,.25); border-radius: 9px; color: #fda4af; background: rgba(248,113,113,.08); font-size: 21px; line-height: 1; transition: transform .18s,border-color .18s,background .18s,box-shadow .18s; }
+.kick-player-button:hover:not(:disabled) { transform: scale(1.08); border-color: rgba(248,113,113,.6); background: rgba(248,113,113,.17); box-shadow: 0 0 16px rgba(248,113,113,.16); }
+.kick-player-button:disabled { opacity: .55; cursor: wait; }
 .waiting-pulse,.host-wait-note { display: flex; align-items: center; margin: 0; color: #8f899b; font-size: 10px; }
 .waiting-pulse .status-dot,.host-wait-note .status-dot { animation: status-pulse 1.5s ease-in-out infinite; }
 .start-game-button { width: 100%; min-height: 52px; margin-top: 16px; font-size: 14px; }
@@ -203,6 +217,21 @@ button:focus-visible, input:focus-visible { outline: 2px solid #06b6d4; outline-
 .round-option span { color: #817a8d; font: 8px 'DM Mono',monospace; letter-spacing: .1em; }
 .round-option-selected { border-color: #a855f7; background: rgba(168,85,247,.14); box-shadow: inset 0 0 18px rgba(168,85,247,.08),0 0 18px rgba(168,85,247,.13); }
 .round-option-selected strong { color: #d7b4fc; }
+.custom-card-editor { display: grid; width: 100%; gap: 12px; margin-top: 20px; padding: 18px; border: 1px solid rgba(236,72,153,.22); border-radius: 14px; background: linear-gradient(145deg,rgba(33,21,35,.95),rgba(15,13,22,.96)); box-shadow: 0 14px 42px rgba(0,0,0,.2),0 0 28px rgba(236,72,153,.05); animation: player-enter .4s ease both; }
+.custom-card-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.custom-card-editor-heading .section-kicker { color: #f0abfc; font-size: 8px; }
+.custom-card-counter { color: #8e8799; font: 9px 'DM Mono',monospace; }
+.custom-card-input { width: 100%; min-height: 112px; resize: vertical; padding: 15px; border: 1px solid #393142; border-radius: 11px; color: #27232d; background: linear-gradient(150deg,#fffdf7,#f1ebdf); font: 600 15px/1.5 'Space Grotesk',sans-serif; box-shadow: 0 8px 22px rgba(0,0,0,.17); transition: border-color .2s,box-shadow .2s,transform .2s; }
+.custom-card-input::placeholder { color: #97909a; font-weight: 400; }
+.custom-card-input:focus { border-color: #ec4899; box-shadow: 0 0 0 3px rgba(236,72,153,.14),0 8px 22px rgba(0,0,0,.17); outline: none; }
+.custom-card-input:disabled { opacity: .8; }
+.custom-card-actions { display: flex; flex-wrap: wrap; gap: 9px; }
+.custom-card-hint { margin: 0; color: #9c91a7; font-size: 10px; line-height: 1.5; }
+.custom-card-editor .rounds-picker { margin-top: 5px; }
+.custom-card-editor .start-game-button { margin-top: 0; }
+.waiting-roster .player-info { min-width: 0; flex: 1; }
+.waiting-roster .player-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.waiting-roster .player-info small { color: #c084fc; }
 .results-shell { position: relative; min-height: 100vh; overflow: hidden; background: radial-gradient(ellipse at 50% 15%,rgba(168,85,247,.21),transparent 46%),radial-gradient(ellipse at 50% 75%,rgba(236,72,153,.08),transparent 38%),#0a090f; }
 .results-shell::before { position: absolute; inset: 0; background-image: linear-gradient(rgba(168,85,247,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(168,85,247,.035) 1px,transparent 1px); background-size: 34px 34px; mask-image: linear-gradient(transparent,#000 20%,#000 85%,transparent); pointer-events: none; content: ''; }
 .results-hud { position: relative; z-index: 2; }
@@ -286,6 +315,16 @@ button:focus-visible, input:focus-visible { outline: 2px solid #06b6d4; outline-
   0% { opacity: 0; transform: perspective(900px) rotateY(18deg) translateY(16px) scale(.96); }
   72% { opacity: 1; transform: perspective(900px) rotateY(-2deg) translateY(-2px) scale(1.01); }
   100% { opacity: 1; transform: perspective(900px) rotateY(0) translateY(0) scale(1); }
+}
+@keyframes vote-receipt-arrive {
+  0% { opacity: 0; transform: translate3d(-12px,12px,0) scale(.65) rotate(-5deg); filter: blur(3px); }
+  65% { opacity: 1; transform: translate3d(2px,-2px,0) scale(1.08) rotate(1deg); filter: blur(0); }
+  100% { opacity: 1; transform: translate3d(0,0,0) scale(1) rotate(0); }
+}
+@keyframes vote-count-pop {
+  0% { transform: scale(.65); filter: brightness(1.8); }
+  75% { transform: scale(1.25); }
+  100% { transform: scale(1); filter: brightness(1); }
 }
 @keyframes sudden-glow {
   0%,100% { box-shadow: 0 0 0 rgba(236,72,153,0); }
@@ -385,6 +424,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid #06b6d4; outline-
   .waiting-roster .player-info { display: grid; }
   .waiting-roster .player-info small { display: block; font-size: 7px; }
   .roster-check { margin-left: auto; }
+  .kick-player-button { margin-left: auto; }
+  .custom-card-editor { gap: 10px; margin-top: 14px; padding: 13px; border-radius: 14px; }
+  .custom-card-editor-heading .section-kicker { font-size: 7px; }
+  .custom-card-input { min-height: 100px; padding: 13px; font-size: 14px; }
+  .custom-card-actions { display: grid; grid-template-columns: 1fr; }
+  .custom-card-actions .button { width: 100%; }
   .start-game-button,.host-wait-note { min-height: 54px; border-radius: 12px; }
   .rounds-picker { margin-top: 16px; }
   .round-option { min-height: 68px; border-radius: 12px; }

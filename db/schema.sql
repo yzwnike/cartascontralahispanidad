@@ -20,6 +20,15 @@ CREATE TABLE IF NOT EXISTS round_votes (
   PRIMARY KEY (room_id, round_number, vote_number, voter_player_id)
 );
 
+CREATE TABLE IF NOT EXISTS room_custom_cards (
+  room_id uuid NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  player_id uuid NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  card_text text NOT NULL CHECK (char_length(btrim(card_text)) BETWEEN 3 AND 160),
+  is_ready boolean NOT NULL DEFAULT false,
+  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (room_id, player_id)
+);
+
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -40,6 +49,8 @@ CREATE INDEX IF NOT EXISTS played_cards_room_round_idx
   ON played_cards (room_id, round_number, submission_id);
 CREATE INDEX IF NOT EXISTS round_votes_room_round_idx
   ON round_votes (room_id, round_number, vote_number, submission_id);
+CREATE UNIQUE INDEX IF NOT EXISTS room_custom_cards_unique_text_idx
+  ON room_custom_cards (room_id, lower(btrim(card_text)));
 CREATE INDEX IF NOT EXISTS cards_type_id_idx
   ON cards (type, id);
 

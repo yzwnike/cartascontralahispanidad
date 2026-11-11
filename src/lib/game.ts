@@ -4,6 +4,9 @@ export type Player = {
   score: number;
   isHost: boolean;
   hand: string[];
+  customCardText: string | null;
+  customCardSubmitted: boolean;
+  ready: boolean;
 };
 
 export type Submission = {
@@ -12,10 +15,16 @@ export type Submission = {
   cards: string[];
 };
 
+export type PublicVote = {
+  voterId: string;
+  voterName: string;
+  submissionId: string;
+};
+
 export type GameRoom = {
   id: string;
   code: string;
-  status: 'waiting' | 'playing' | 'judging' | 'sudden_vote' | 'finished';
+  status: 'waiting' | 'card_creation' | 'playing' | 'judging' | 'sudden_vote' | 'finished';
   hostId: string;
   judgeId: string;
   round: number;
@@ -23,6 +32,8 @@ export type GameRoom = {
   blackCard: string;
   pick: number;
   players: Player[];
+  customCardsSubmitted: number;
+  allPlayersReady: boolean;
   submissions: Submission[];
   submittedCount: number;
   mySubmissionId: string | null;
@@ -31,6 +42,7 @@ export type GameRoom = {
   myVoteId: string | null;
   voteOptions: string[];
   voteCounts: Record<string, number>;
+  publicVotes: PublicVote[];
   winnerIds: string[];
   winnerId: string | null;
 };
@@ -40,6 +52,13 @@ export type RoomResponse = {
   playerId: string;
   playerToken: string;
 };
+
+export class GameApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = 'GameApiError';
+  }
+}
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   let response: Response;
@@ -54,7 +73,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
   const payload = (await response.json().catch(() => null)) as { error?: string } | null;
   if (!response.ok) {
-    throw new Error(payload?.error ?? `La petición falló (${response.status}).`);
+    throw new GameApiError(payload?.error ?? `La petición falló (${response.status}).`, response.status);
   }
   if (!payload) throw new Error('El servidor devolvió una respuesta vacía.');
   return payload as T;
@@ -117,9 +136,41 @@ export async function startRoom(code: string, playerId: string, playerToken: str
   });
 }
 
+export async function prepareRoom(code: string, playerId: string, playerToken: string) {
+  return request<{ room: GameRoom }>(`/api/rooms/${encodeURIComponent(code)}/prepare`, {
+    method: 'POST',
+    headers: authenticated(playerToken),
+    body: JSON.stringify({ playerId }),
+  });
+}
+
+export async function submitCustomCard(code: string, playerId: string, playerToken: string, cardText: string) {
+  return request<{ room: GameRoom }>(`/api/rooms/${encodeURIComponent(code)}/custom-card`, {
+    method: 'POST',
+    headers: authenticated(playerToken),
+    body: JSON.stringify({ playerId, cardText }),
+  });
+}
+
+export async function setReady(code: string, playerId: string, playerToken: string, ready: boolean) {
+  return request<{ room: GameRoom }>(`/api/rooms/${encodeURIComponent(code)}/ready`, {
+    method: 'POST',
+    headers: authenticated(playerToken),
+    body: JSON.stringify({ playerId, ready }),
+  });
+}
+
 export async function leaveRoom(code: string, playerId: string, playerToken: string) {
   return request<{ success: true }>(`/api/rooms/${encodeURIComponent(code)}/players/${encodeURIComponent(playerId)}`, {
     method: 'DELETE',
     headers: authenticated(playerToken),
+  });
+}
+
+export async function kickRoomPlayer(code: string, playerId: string, playerToken: string, targetId: string) {
+  return request<{ room: GameRoom }>(`/api/rooms/${encodeURIComponent(code)}/kick`, {
+    method: 'POST',
+    headers: authenticated(playerToken),
+    body: JSON.stringify({ playerId, targetId }),
   });
 }

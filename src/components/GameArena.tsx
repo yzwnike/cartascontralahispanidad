@@ -1,9 +1,14 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import {
   getRoom,
+  GameApiError,
+  kickRoomPlayer as kickRoomPlayerRequest,
   leaveRoom as leaveRoomRequest,
   nextRound as nextRoundRequest,
+  prepareRoom as prepareRoomRequest,
+  setReady as setReadyRequest,
   startRoom as startRoomRequest,
+  submitCustomCard as submitCustomCardRequest,
   submitCards as submitCardsRequest,
   voteForSubmission as voteForSubmissionRequest,
   type GameRoom,
@@ -22,8 +27,13 @@ export default function GameArena({ initialRoom, playerId, playerToken, onLeave 
   const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState('');
   const [syncError, setSyncError] = useState('');
+  const [kickedOut, setKickedOut] = useState(false);
+  const [kickingPlayerId, setKickingPlayerId] = useState('');
+  const [customCardText, setCustomCardText] = useState('');
+  const [actionPending, setActionPending] = useState(false);
   const [roundsLimit, setRoundsLimit] = useState<5 | 10 | 20>(initialRoom.roundsLimit);
   const player = room.players.find((item) => item.id === playerId);
+  const savedCustomCard = player?.customCardText ?? null;
   const allResponsesIn = room.submittedCount === room.players.length && room.players.length >= 2;
   const hasSubmitted = room.mySubmissionId !== null;
   const canVote = allResponsesIn
@@ -32,8 +42,15 @@ export default function GameArena({ initialRoom, playerId, playerToken, onLeave 
     && room.winnerIds.length === 0;
 
   useEffect(() => {
+    if (savedCustomCard !== null) setCustomCardText(savedCustomCard);
+  }, [savedCustomCard]);
+
+  useEffect(() => {
     let active = true;
+    let removedFromRoom = false;
+    let interval = 0;
     const syncRoom = async () => {
+      if (removedFromRoom) return;
       try {
         const result = await getRoom(room.code, playerId, playerToken);
         if (active) {
@@ -41,33 +58,52 @@ export default function GameArena({ initialRoom, playerId, playerToken, onLeave 
           setSyncError('');
         }
       } catch (error) {
+        if (active && error instanceof GameApiError && error.status === 403 && error.message === 'No formas parte de esta sala.') {
+          removedFromRoom = true;
+          setKickedOut(true);
+          window.clearInterval(interval);
+          return;
+        }
         if (active) setSyncError(error instanceof Error ? error.message : 'No se pudo actualizar la sala.');
       }
     };
-    const interval = window.setInterval(() => { void syncRoom(); }, 1200);
+    interval = window.setInterval(() => { void syncRoom(); }, 1200);
     return () => {
       active = false;
       window.clearInterval(interval);
     };
   }, [room.code, playerId, playerToken]);
 
-  if (!player) {
+  if (!player || kickedOut) {
     return (
       <section className="game-shell">
-        <p className="form-error">Tu jugador ya no aparece en esta sala.</p>
+        <p className="form-error">{kickedOut ? 'El anfitrión te ha sacado de la sala.' : 'Tu jugador ya no aparece en esta sala.'}</p>
         <button className="button button-secondary" onClick={onLeave}>Volver al inicio</button>
       </section>
     );
   }
 
+  async function kickRoomPlayer(targetId: string, targetName: string) {
+    if (!window.confirm(`¿Quieres expulsar a ${targetName} de esta sala? Podrá volver a entrar si le compartes el código otra vez.`)) return;
+    setKickingPlayerId(targetId);
+    try {
+      await runAction(() => kickRoomPlayerRequest(room.code, playerId, playerToken, targetId));
+    } finally {
+      setKickingPlayerId('');
+    }
+  }
+
   async function runAction(action: () => Promise<{ room: GameRoom }>) {
     setActionError('');
+    setActionPending(true);
     try {
       const result = await action();
       setRoom(result.room);
       setSelectedCards([]);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'No se pudo completar la acción.');
+    } finally {
+      setActionPending(false);
     }
   }
 
@@ -97,6 +133,23 @@ export default function GameArena({ initialRoom, playerId, playerToken, onLeave 
     await runAction(() => startRoomRequest(room.code, playerId, playerToken, roundsLimit));
   }
 
+  async function prepareGame() {
+    await runAction(() => prepareRoomRequest(room.code, playerId, playerToken));
+  }
+
+  async function saveCustomCard() {
+    if (customCardText.trim().length < 3) {
+      setActionError('Tu carta debe tener al menos 3 caracteres.');
+      return;
+    }
+    await runAction(() => submitCustomCardRequest(room.code, playerId, playerToken, customCardText));
+  }
+
+  async function toggleReady() {
+    if (!player) return;
+    await runAction(() => setReadyRequest(room.code, playerId, playerToken, !player.ready));
+  }
+
   async function leaveCurrentRoom() {
     setActionError('');
     try {
@@ -117,7 +170,8 @@ export default function GameArena({ initialRoom, playerId, playerToken, onLeave 
     }
   }
 
-  if (room.status === 'waiting') {
+  if (room.status === 'waiting' || room.status === 'card_creation') {
+    const creatingCards = room.status === 'card_creation';
     return (
       <section className="game-shell lobby-shell" aria-label="Sala de espera">
         <header className="game-hud">
@@ -132,23 +186,36 @@ export default function GameArena({ initialRoom, playerId, playerToken, onLeave 
 
         <div className="waiting-content">
           <div className="waiting-orbit" aria-hidden="true"><span>✳</span><i></i><i></i><i></i></div>
-          <p className="section-kicker">LOBBY DE LA MOVIDA</p>
-          <h1>La partida empieza<br /><span>cuando tú quieras.</span></h1>
-          <p className="waiting-copy">Pasa el código al grupo. Cuando estén todos dentro, dale al botón y que empiece el salseo.</p>
+          <p className="section-kicker">{creatingCards ? 'ANTES DEL SALSEO' : 'LOBBY DE LA MOVIDA'}</p>
+          <h1>{creatingCards ? <>Cada cual trae<br /><span>su propia movida.</span></> : <>La partida empieza<br /><span>cuando tú quieras.</span></>}</h1>
+          <p className="waiting-copy">{creatingCards ? 'Escribe una carta blanca para esta partida. Cuando todos la hayan creado y estén listos, el anfitrión pone el juego en marcha.' : 'Pasa el código al grupo. Cuando estén todos dentro, abrimos la creación de cartas y empieza el salseo.'}</p>
           <div className="waiting-roster">
-            <div className="roster-heading"><span>EN LA SALA</span><strong>{room.players.length} {room.players.length === 1 ? 'JUGADOR' : 'JUGADORES'}</strong></div>
+            <div className="roster-heading"><span>{creatingCards ? 'CARTAS Y PREPARACIÓN' : 'EN LA SALA'}</span><strong>{creatingCards ? `${room.customCardsSubmitted}/${room.players.length} CARTAS` : `${room.players.length} ${room.players.length === 1 ? 'JUGADOR' : 'JUGADORES'}`}</strong></div>
             <ul className="player-list">
               {room.players.map((item, index) => (
                 <li className={`player-row ${item.id === playerId ? 'is-you' : ''}`} key={item.id}>
                   <span className={`player-avatar avatar-${index % 4}`}>{item.name.trim().charAt(0).toUpperCase()}</span>
-                  <span className="player-info"><strong>{item.name}{item.id === playerId ? ' (tú)' : ''}</strong><small>{item.isHost ? 'ANFITRIÓN/A' : 'LISTO/A'}</small></span>
-                  <span className="roster-check" aria-label="Conectado">✓</span>
+                  <span className="player-info"><strong>{item.name}{item.id === playerId ? ' (tú)' : ''}</strong><small>{creatingCards ? (item.ready ? 'LISTO/A' : item.customCardSubmitted ? 'CARTA GUARDADA' : 'FALTA SU CARTA') : item.isHost ? 'ANFITRIÓN/A' : 'LISTO/A'}</small></span>
+                  {player.isHost && item.id !== playerId ? (
+                    <button
+                      type="button"
+                      className="kick-player-button"
+                      aria-label={`Expulsar a ${item.name}`}
+                      title={`Expulsar a ${item.name}`}
+                      disabled={kickingPlayerId === item.id || actionPending}
+                      onClick={() => void kickRoomPlayer(item.id, item.name)}
+                    >
+                      {kickingPlayerId === item.id ? '…' : '×'}
+                    </button>
+                  ) : (
+                    <span className="roster-check" aria-label="Conectado">✓</span>
+                  )}
                 </li>
               ))}
             </ul>
-            <p className="waiting-pulse"><span className="status-dot"></span> Esperando a que se una tu gente...</p>
+            <p className="waiting-pulse"><span className="status-dot"></span> {creatingCards ? `${room.players.filter((item) => item.ready).length}/${room.players.length} personas listas` : 'Esperando a que se una tu gente...'}</p>
           </div>
-          {player.isHost ? (
+          {!creatingCards && player.isHost ? (
             <>
               <fieldset className="rounds-picker">
                 <legend>ELIGE LA DURACIÓN DE LA PARTIDA</legend>
@@ -166,17 +233,86 @@ export default function GameArena({ initialRoom, playerId, playerToken, onLeave 
                   ))}
                 </div>
               </fieldset>
-              <button className="button button-primary start-game-button" disabled={room.players.length < 2} onClick={() => void startGame()}>
-                Empezar partida · {roundsLimit} rondas <span>→</span>
+              <button className="button button-primary start-game-button" disabled={room.players.length < 2 || actionPending} onClick={() => void prepareGame()}>
+                Pasar a crear cartas <span>→</span>
               </button>
-              {room.players.length < 2 && <p className="lobby-hint"><span>✦</span> Hace falta que se una otra persona para poder votar.</p>}
+              {room.players.length < 2 && <p className="lobby-hint"><span>✦</span> Hace falta que se una otra persona para poder jugar.</p>}
             </>
-          ) : (
+          ) : !creatingCards ? (
             <div className="host-wait-note"><span className="status-dot"></span> El anfitrión empieza cuando estéis listos</div>
+          ) : (
+            <section className="custom-card-editor" aria-label="Crear tu carta blanca">
+              <div className="custom-card-editor-heading">
+                <span className="section-kicker">TU CARTA BLANCA · EDICIÓN DE ESTA PARTIDA</span>
+                <span className="custom-card-counter">{customCardText.trim().length}/160</span>
+              </div>
+              <label className="sr-only" htmlFor="custom-white-card">Escribe tu carta blanca</label>
+              <textarea
+                id="custom-white-card"
+                className="custom-card-input"
+                maxLength={160}
+                placeholder="Ej. Llegar tarde y decir «es que había un señor»."
+                value={customCardText}
+                disabled={player.ready || actionPending}
+                onChange={(event) => setCustomCardText(event.target.value)}
+              />
+              <div className="custom-card-actions">
+                {player.ready ? (
+                  <button className="button button-secondary" disabled={actionPending} onClick={() => void toggleReady()}>Cambiar mi carta</button>
+                ) : (
+                  <>
+                    <button className="button button-secondary" disabled={actionPending || customCardText.trim().length < 3 || customCardText.trim() === (savedCustomCard ?? '')} onClick={() => void saveCustomCard()}>
+                      {player.customCardSubmitted ? 'Guardar cambios' : 'Guardar mi carta'}
+                    </button>
+                    <button className="button button-primary" disabled={actionPending || !player.customCardSubmitted || customCardText.trim() !== savedCustomCard} onClick={() => void toggleReady()}>
+                      Marcar que estoy listo <span>✓</span>
+                    </button>
+                  </>
+                )}
+              </div>
+              <p className="custom-card-hint">
+                {player.ready
+                  ? '¡Perfecto! Tu carta está guardada y ya estás listo/a.'
+                  : player.customCardSubmitted
+                    ? 'Carta guardada. Márcate como listo/a cuando quieras.'
+                    : 'Escribe algo original: tu carta se repartirá a otra persona al empezar.'}
+              </p>
+              {player.isHost && (
+                <>
+                  <fieldset className="rounds-picker">
+                    <legend>ELIGE LA DURACIÓN DE LA PARTIDA</legend>
+                    <div className="round-options">
+                      {([5, 10, 20] as const).map((count) => (
+                        <button
+                          type="button"
+                          key={count}
+                          aria-pressed={roundsLimit === count}
+                          className={`round-option ${roundsLimit === count ? 'round-option-selected' : ''}`}
+                          onClick={() => setRoundsLimit(count)}
+                        >
+                          <strong>{count}</strong><span>RONDAS</span>
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
+                  <button
+                    className="button button-primary start-game-button"
+                    disabled={!room.allPlayersReady || actionPending}
+                    onClick={() => void startGame()}
+                  >
+                    {room.allPlayersReady
+                      ? `Empezar partida · ${roundsLimit} rondas`
+                      : `Esperando al grupo · ${room.players.filter((item) => item.ready).length}/${room.players.length} listos`}
+                    <span>→</span>
+                  </button>
+                </>
+              )}
+              {!player.isHost && <div className="host-wait-note"><span className="status-dot"></span> El anfitrión empezará cuando todo el grupo esté listo</div>}
+            </section>
           )}
           {actionError && <p className="form-error" role="alert">{actionError}</p>}
         </div>
-        <div className="game-footnote"><span>Las nuevas incorporaciones se cierran cuando empiece la partida.</span><button onClick={() => void leaveCurrentRoom()}>Salir de la sala</button></div>
+        <div className="game-footnote"><span>{creatingCards ? 'Cada carta personalizada se repartirá a otra persona al comenzar.' : 'Las nuevas incorporaciones se cierran al empezar a crear cartas.'}</span><button onClick={() => void leaveCurrentRoom()}>Salir de la sala</button></div>
       </section>
     );
   }
@@ -306,9 +442,41 @@ export default function GameArena({ initialRoom, playerId, playerToken, onLeave 
                       <span className="submission-number">
                         RESPUESTA {String(index + 1).padStart(2, '0')}
                         {isWinner ? ' · GANADORA' : isOwn ? ' · TU RESPUESTA' : ''}
-                        {voteCount !== undefined ? ` · ${voteCount} VOTO${voteCount === 1 ? '' : 'S'}` : ''}
+                        {voteCount !== undefined ? ` · ${voteCount} ${voteCount === 1 ? 'VOTO' : 'VOTOS'}` : ''}
                       </span>
                       <span>{submission.cards.join(' + ')}</span>
+                      <div className="vote-receipts" aria-label={`${voteCount ?? 0} votos visibles`}>
+                        <div className="vote-receipts-heading">
+                          <span className="vote-receipts-label">QUIÉN HA VOTADO</span>
+                          <span className="vote-receipts-count" key={`${submission.id}-${voteCount ?? 0}`}>
+                            {voteCount ?? 0} {voteCount === 1 ? 'VOTO' : 'VOTOS'}
+                          </span>
+                        </div>
+                        {room.publicVotes.some((vote) => vote.submissionId === submission.id) ? (
+                          <div className="vote-receipts-list">
+                            {room.publicVotes
+                              .filter((vote) => vote.submissionId === submission.id)
+                              .map((vote) => {
+                                const voterIndex = room.players.findIndex((item) => item.id === vote.voterId);
+                                return (
+                                  <span
+                                    className="vote-receipt"
+                                    key={vote.voterId}
+                                    title={`${vote.voterName} ha votado esta respuesta`}
+                                    style={{ animationDelay: `${Math.min(voterIndex, 8) * 55}ms` }}
+                                  >
+                                    <span className={`vote-receipt-avatar avatar-${Math.max(0, voterIndex) % 4}`}>
+                                      {vote.voterName.trim().charAt(0).toUpperCase()}
+                                    </span>
+                                    {vote.voterName}
+                                  </span>
+                                );
+                              })}
+                          </div>
+                        ) : (
+                          <span className="vote-receipts-empty">Aún sin votos · que empiece el salseo</span>
+                        )}
+                      </div>
                       {room.winnerIds.length > 0 && <small>{isWinner ? `🏆 ${owner?.name} gana esta ronda` : `De ${owner?.name ?? 'jugador/a'}`}</small>}
                       {canVote && isVoteOption && !isOwn && <small>VOTAR POR ESTA · TOCA LA CARTA</small>}
                       {isOwn && room.status === 'sudden_vote' && <small>No puedes votar tu propia respuesta</small>}
