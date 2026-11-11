@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS cunadometro_players (
   created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE cunadometro_players
+  ADD COLUMN IF NOT EXISTS is_active boolean NOT NULL DEFAULT true;
+
 CREATE TABLE IF NOT EXISTS cunadometro_rounds (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   room_id uuid NOT NULL REFERENCES cunadometro_rooms(id) ON DELETE CASCADE,

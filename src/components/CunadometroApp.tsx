@@ -58,6 +58,7 @@ export default function CunadometroApp() {
   const duelTaskListRef = useRef<HTMLDivElement | null>(null);
 
   const me = room?.players.find((player) => player.id === session?.playerId);
+  const activePlayers = room?.players.filter((player) => player.isActive) ?? [];
   const round = room?.round ?? null;
   const inDuel = round?.mode === 'duel' && Boolean(session && round.duelPlayerIds.includes(session.playerId));
   const hasAnswered = Boolean(round?.myAnswerId);
@@ -235,6 +236,32 @@ export default function CunadometroApp() {
     return () => context.revert();
   }, [round?.number, round?.status, room?.players.map((player) => player.score).join(',')]);
 
+  useLayoutEffect(() => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const root = document.querySelector<HTMLElement>('.cu-app');
+    if (!root) return;
+    const targets = root.querySelectorAll<HTMLElement>(
+      '.cu-game-header, .cu-intro, .cu-waiting > *, .cu-play-area > :not(.cu-answer-reveal), .cu-score-strip, .cu-footer',
+    );
+    const context = gsap.context(() => {
+      gsap.fromTo(targets, {
+        autoAlpha: 0,
+        y: 22,
+        rotate: (index) => (index % 2 === 0 ? -1.5 : 1.5),
+        transformOrigin: '50% 50%',
+      }, {
+        autoAlpha: 1,
+        y: 0,
+        rotate: 0,
+        duration: 0.62,
+        stagger: 0.055,
+        ease: 'back.out(1.45)',
+        clearProps: 'transform',
+      });
+    }, root);
+    return () => context.revert();
+  }, [room?.status, room?.gameStage, round?.number, round?.status]);
+
   function storeSession(next: CunadometroSession) {
     setSession(next);
     setRoom(next.room);
@@ -297,15 +324,17 @@ export default function CunadometroApp() {
   }
 
   async function exitRoom() {
-    if (room?.status === 'playing') {
-      setError('La partida está en curso. Al volver, podrás continuar desde este dispositivo.');
-      return;
-    }
+    if (pending) return;
+    if (room?.status === 'playing' && !window.confirm(
+      '¿Salir de la partida? Dejarás de participar y el resto podrá continuar. Esta acción no se puede deshacer.',
+    )) return;
+    setPending(true);
     if (room && session) {
       try {
         await leaveCunadometroRoom(room.code, session.playerId, session.playerToken);
       } catch (leaveError) {
         setError(leaveError instanceof Error ? leaveError.message : 'No se pudo salir de la sala.');
+        setPending(false);
         return;
       }
     }
@@ -313,6 +342,7 @@ export default function CunadometroApp() {
     setSession(null);
     setRoom(null);
     setError('');
+    setPending(false);
   }
 
   if (!room || !session) {
@@ -402,17 +432,18 @@ export default function CunadometroApp() {
   }
 
   if (room.status === 'finished') {
-    const ranking = [...room.players].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+    const ranking = [...activePlayers].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
     const highest = ranking[0]?.score ?? 0;
     const champions = ranking.filter((player) => player.score === highest);
     const podium = ranking.slice(0, 3);
     return (
       <main className="cu-app cu-room-view cu-results">
-        <header className="cu-game-header"><a className="cu-mini-logo" href="/">CUÑA<span>✳</span></a><span className="cu-kicker">PARTIDA TERMINADA</span></header>
+        <header className="cu-game-header"><a className="cu-mini-logo" href="/">CUÑA<span>✳</span></a><span className="cu-kicker">{activePlayers.length < 3 ? 'PARTIDA CERRADA · MENOS DE 3 JUGADORES' : 'PARTIDA TERMINADA'}</span><button className="cu-exit" disabled={pending} onClick={() => void exitRoom()}>SALIR</button></header>
         <section className="cu-waiting">
           <div className="cu-trophy">✦</div>
           <p className="cu-kicker">LA ÚLTIMA PALABRA</p>
           <h1>{champions.length > 1 ? 'EMPATE ÉPICO' : 'CAMPEÓN/A'}<br /><span>{champions.map((player) => player.name).join(' · ')}</span></h1>
+          {activePlayers.length < 3 && <p className="cu-copy">La partida se cerró porque quedan menos de tres jugadores activos.</p>}
           <div className="cu-podium" aria-label="Podio final">
             {[2, 1, 0].map((placeIndex, revealIndex) => {
               const player = podium[placeIndex];
@@ -435,10 +466,10 @@ export default function CunadometroApp() {
   }
 
   if (room.gameStage === 'middle_ranking') {
-    const ranking = [...room.players].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+    const ranking = [...activePlayers].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
     return (
       <main className="cu-app cu-room-view cu-intermission">
-        <header className="cu-game-header"><a className="cu-mini-logo" href="/">CUÑA<span>✳</span></a><span className="cu-round-count">MITAD DE PARTIDA</span></header>
+        <header className="cu-game-header"><a className="cu-mini-logo" href="/">CUÑA<span>✳</span></a><span className="cu-round-count">MITAD DE PARTIDA</span><button className="cu-exit" disabled={pending} onClick={() => void exitRoom()}>SALIR</button></header>
         <section className="cu-waiting">
           <div className="cu-trophy cu-intermission-star">✳</div>
           <p className="cu-kicker">EL MARCADOR SE RESETEA… MENTIRA</p>
@@ -466,6 +497,7 @@ export default function CunadometroApp() {
           <a className="cu-mini-logo" href="/">CUÑA<span>✳</span></a>
           <button className="cu-code-pill" onClick={() => void copyRoomCode()}>{copied ? 'COPIADO' : room.code}</button>
           <span className="cu-round-count">{round.number}<small> / {room.roundsLimit}</small></span>
+          <button className="cu-exit" disabled={pending} onClick={() => void exitRoom()}>SALIR</button>
         </header>
         <div className="cu-progress"><span style={{ width: `${round.number / room.roundsLimit * 100}%` }} /></div>
         <section className="cu-play-area">
@@ -531,6 +563,7 @@ export default function CunadometroApp() {
         <a className="cu-mini-logo" href="/">CUÑA<span>✳</span></a>
         <button className="cu-code-pill" onClick={() => void copyRoomCode()}>{copied ? 'COPIADO' : room.code}</button>
         <span className="cu-round-count">{round.number}<small> / {room.roundsLimit}</small></span>
+        <button className="cu-exit" disabled={pending} onClick={() => void exitRoom()}>SALIR</button>
       </header>
       <div className="cu-progress"><span style={{ width: `${round.number / room.roundsLimit * 100}%` }} /></div>
       <section className="cu-play-area">
@@ -564,7 +597,7 @@ export default function CunadometroApp() {
           <div className="cu-wait-card">
             <span className="cu-spinner"></span>
             <strong>{hasAnswered ? 'Respuesta enviada. Que nadie mire.' : 'Esta vez te toca de público.'}</strong>
-            <span>{round.submittedCount}/{round.mode === 'duel' ? 2 : room.players.length} respuestas en secreto</span>
+            <span>{round.submittedCount}/{round.mode === 'duel' ? 2 : activePlayers.length} respuestas en secreto</span>
           </div>
         )}
 
@@ -631,9 +664,9 @@ export default function CunadometroApp() {
         {error && <p className="cu-error" role="alert">{error}</p>}
       </section>
       <section className="cu-score-strip" ref={scoreStripRef}>
-        {room.players.map((player, index) => <div key={player.id}><span className={`cu-avatar cu-avatar-${index % 4}`}>{player.name.charAt(0)}</span><span>{player.name}{player.id === me.id ? ' (tú)' : ''}</span><b>{player.score}</b></div>)}
+        {activePlayers.map((player, index) => <div key={player.id}><span className={`cu-avatar cu-avatar-${index % 4}`}>{player.name.charAt(0)}</span><span>{player.name}{player.id === me.id ? ' (tú)' : ''}</span><b>{player.score}</b></div>)}
       </section>
-      <footer className="cu-footer"><span>PARTIDA EN CURSO · VUELVE A ESTA PANTALLA PARA CONTINUAR</span><span>CONSIGNA ORIGINAL · MADE BY YAZAWA</span></footer>
+      <footer className="cu-footer"><span>PARTIDA EN CURSO</span><span>CONSIGNA ORIGINAL · MADE BY YAZAWA</span></footer>
     </main>
   );
 }

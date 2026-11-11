@@ -24,6 +24,7 @@ export type CunadometroPlayer = {
   score: number;
   isHost: boolean;
   duelsPlayed: number;
+  isActive: boolean;
 };
 export type CunadometroAnswer = {
   id: string;
