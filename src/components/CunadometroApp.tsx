@@ -18,6 +18,23 @@ import { GameApiError } from '../lib/game';
 const SESSION_KEY = 'cunadometro-session';
 const DUEL_REVEAL_DURATION_MS = 6100;
 
+function getStoredSessionCredentials(value: unknown) {
+  if (!value || typeof value !== 'object') return null;
+  const stored = value as Record<string, unknown>;
+  const room = stored.room;
+  if (!room || typeof room !== 'object') return null;
+  const roomCode = (room as Record<string, unknown>).code;
+  if (
+    typeof roomCode !== 'string'
+    || !/^[A-Z2-9]{6}$/i.test(roomCode)
+    || typeof stored.playerId !== 'string'
+    || !stored.playerId
+    || typeof stored.playerToken !== 'string'
+    || !stored.playerToken
+  ) return null;
+  return { roomCode, playerId: stored.playerId, playerToken: stored.playerToken };
+}
+
 function ModeMark({ mode }: { mode: 'duel' | 'all_play' }) {
   return <span className={`mode-mark ${mode === 'duel' ? 'mode-mark-duel' : 'mode-mark-group'}`}>{mode === 'duel' ? 'VS' : '✳'}</span>;
 }
@@ -57,27 +74,38 @@ export default function CunadometroApp() {
   useEffect(() => {
     const saved = window.localStorage.getItem(SESSION_KEY);
     if (!saved) return;
+    let parsed: unknown;
     try {
-      const restored = JSON.parse(saved) as CunadometroSession;
-      if (!restored.room?.code || !restored.playerId || !restored.playerToken) throw new Error('Invalid session');
-      setSession(restored);
-      setRoom(restored.room);
-      setName(restored.room.players.find((player) => player.id === restored.playerId)?.name ?? '');
-      void getCunadometroRoom(restored.room.code, restored.playerId, restored.playerToken)
-        .then((result) => setRoom(result.room))
-        .catch((restoreError) => {
-          if (restoreError instanceof GameApiError && [403, 404].includes(restoreError.status)) {
-            window.localStorage.removeItem(SESSION_KEY);
-            setSession(null);
-            setRoom(null);
-            setError('La sala ya no existe o tu jugador ya no está en ella.');
-          } else {
-            setError(restoreError instanceof Error ? restoreError.message : 'No se pudo recuperar la sesión.');
-          }
-        });
+      parsed = JSON.parse(saved);
     } catch {
       window.localStorage.removeItem(SESSION_KEY);
+      return;
     }
+    const credentials = getStoredSessionCredentials(parsed);
+    if (!credentials) {
+      window.localStorage.removeItem(SESSION_KEY);
+      return;
+    }
+
+    void getCunadometroRoom(credentials.roomCode, credentials.playerId, credentials.playerToken)
+      .then(({ room: restoredRoom }) => {
+        if (!Array.isArray(restoredRoom.players) || !restoredRoom.players.some((player) => player.id === credentials.playerId)) {
+          throw new Error('La sesión guardada no coincide con los datos actuales de la sala.');
+        }
+        const restoredSession = { ...credentials, room: restoredRoom };
+        window.localStorage.setItem(SESSION_KEY, JSON.stringify(restoredSession));
+        setSession(restoredSession);
+        setRoom(restoredRoom);
+        setName(restoredRoom.players.find((player) => player.id === credentials.playerId)?.name ?? '');
+      })
+      .catch((restoreError) => {
+        if (restoreError instanceof GameApiError && [401, 403, 404].includes(restoreError.status)) {
+          window.localStorage.removeItem(SESSION_KEY);
+          setError('La sala ya no existe o tu sesión ha caducado. Vuelve a unirte.');
+        } else {
+          setError(restoreError instanceof Error ? restoreError.message : 'No se pudo recuperar la sesión.');
+        }
+      });
   }, []);
 
   useEffect(() => {
