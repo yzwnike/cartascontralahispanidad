@@ -32,7 +32,7 @@ function getStoredSessionCredentials(value: unknown) {
   const roomCode = (room as Record<string, unknown>).code;
   if (
     typeof roomCode !== 'string'
-    || !/^[A-Z2-9]{6}$/i.test(roomCode)
+    || (!/^\d{3}$/.test(roomCode) && !/^[A-Z2-9]{6}$/i.test(roomCode))
     || typeof stored.playerId !== 'string'
     || !stored.playerId
     || typeof stored.playerToken !== 'string'
@@ -399,8 +399,8 @@ export default function CunadometroApp() {
           </button>
           <div className="cu-divider"><span>O ENTRA EN UNA SALA</span></div>
           <form onSubmit={(event) => void enterRoom(event, 'join')}>
-            <input value={code} onChange={(event) => setCode(event.target.value.toUpperCase())} maxLength={6} placeholder="CÓDIGO" aria-label="Código de sala" />
-            <button className="cu-secondary" disabled={pending || !name.trim() || code.trim().length !== 6}>UNIRME</button>
+            <input value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 3))} maxLength={3} inputMode="numeric" pattern="[0-9]{3}" placeholder="123" aria-label="Código de sala" />
+            <button className="cu-secondary" disabled={pending || !name.trim() || !/^\d{3}$/.test(code)}>UNIRME</button>
           </form>
           {error && <p className="cu-error" role="alert">{error}</p>}
         </section>
@@ -594,7 +594,7 @@ export default function CunadometroApp() {
   }
 
   return (
-    <main className={`cu-app cu-room-view cu-playing${round.status === 'voting' ? ' cu-reveal-mode' : ''}`}>
+    <main className={`cu-app cu-room-view cu-playing${round.status === 'voting' ? ' cu-reveal-mode' : round.status === 'resolved' ? ' cu-reveal-mode cu-results-mode' : ''}`}>
       {round.status === 'voting' && (
         <div className="cu-reveal-splash" ref={revealSplashRef} aria-live="polite">
           <span>RONDA {String(round.number).padStart(2, '0')} · {round.mode === 'duel' ? 'DUELO' : 'TODO EL GRUPO JUEGA'}</span>
@@ -687,7 +687,7 @@ export default function CunadometroApp() {
         {round.status === 'resolved' && (
           <>
             <div className="cu-stage-heading"><strong>EL GRUPO HA HABLADO</strong><span>VOTOS REVELADOS</span></div>
-            <div className="cu-answers">
+            <div className={`cu-answers${round.mode === 'duel' ? ' is-duel' : ''}`}>
               {round.answers.map((answer, index) => {
                 const author = room.players.find((player) => player.id === answer.playerId);
                 const votes = round.voteCounts[answer.id] ?? 0;

@@ -6,6 +6,10 @@ ALTER TABLE rooms
   ADD COLUMN IF NOT EXISTS rounds_limit integer NOT NULL DEFAULT 5,
   ADD COLUMN IF NOT EXISTS judge_player_id uuid;
 
+ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_code_key;
+CREATE UNIQUE INDEX IF NOT EXISTS rooms_active_code_unique
+  ON rooms (code) WHERE status <> 'finished';
+
 ALTER TABLE played_cards
   ADD COLUMN IF NOT EXISTS round_number integer NOT NULL DEFAULT 1,
   ADD COLUMN IF NOT EXISTS submission_id uuid;
@@ -39,13 +43,17 @@ CREATE TABLE IF NOT EXISTS room_player_white_cards (
 
 CREATE TABLE IF NOT EXISTS cunadometro_rooms (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  code varchar(6) NOT NULL UNIQUE,
+  code varchar(6) NOT NULL,
   status varchar(20) NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'playing', 'finished')),
   round_number integer NOT NULL DEFAULT 0,
   rounds_limit integer NOT NULL DEFAULT 10 CHECK (rounds_limit IN (5, 10, 20)),
   game_stage varchar(30) NOT NULL DEFAULT 'lobby',
   created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE cunadometro_rooms DROP CONSTRAINT IF EXISTS cunadometro_rooms_code_key;
+CREATE UNIQUE INDEX IF NOT EXISTS cunadometro_active_code_unique
+  ON cunadometro_rooms (code) WHERE status <> 'finished';
 
 ALTER TABLE cunadometro_rooms
   ADD COLUMN IF NOT EXISTS game_stage varchar(30) NOT NULL DEFAULT 'legacy';

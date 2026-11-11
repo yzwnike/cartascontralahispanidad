@@ -36,7 +36,7 @@ export default function RoomLobby() {
   async function handleJoinRoom(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const playerName = name.trim();
-    const roomCode = code.trim().toUpperCase();
+    const roomCode = code.trim();
     if (!playerName) {
       setError('Escribe tu nombre antes de entrar en la sala.');
       return;
@@ -95,13 +95,15 @@ export default function RoomLobby() {
               <input
                 id="room-code"
                 className="text-input code-input"
-                maxLength={6}
-                placeholder="ABCDE"
+                maxLength={3}
+                inputMode="numeric"
+                pattern="[0-9]{3}"
+                placeholder="123"
                 value={code}
-                onChange={(event) => setCode(event.target.value.toUpperCase())}
+                onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 3))}
                 aria-label="Código de sala"
               />
-              <button className="button button-secondary" type="submit" disabled={pending}>Unirme <span>→</span></button>
+              <button className="button button-secondary" type="submit" disabled={pending || !/^\d{3}$/.test(code)}>Unirme <span>→</span></button>
             </div>
           </form>
         </div>

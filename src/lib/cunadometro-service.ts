@@ -8,7 +8,6 @@ import type { GameLength } from './cunadometro-length';
 import { getRevealVoteDelay } from './cunadometro-reveal';
 import { createGameSchedule } from './cunadometro-schedule';
 
-const CODE_CHARACTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const MAX_PLAYERS = 12;
 
 type RoundPlayer = { id: string; duels_played: number };
@@ -125,12 +124,18 @@ function cleanName(value: unknown): string {
 
 function cleanCode(value: string) {
   const code = value.trim().toUpperCase();
-  if (!/^[A-Z2-9]{6}$/.test(code)) throw new GameServiceError('El código de sala debe tener 6 caracteres.');
+  if (!/^\d{3}$/.test(code) && !/^[A-Z2-9]{6}$/.test(code)) {
+    throw new GameServiceError('El código de sala debe tener tres dígitos.');
+  }
   return code;
 }
 
-function newCode() {
-  return Array.from({ length: 6 }, () => CODE_CHARACTERS[randomInt(CODE_CHARACTERS.length)]).join('');
+function newCode(activeCodes: string[]) {
+  const active = new Set(activeCodes);
+  const available = Array.from({ length: 1000 }, (_, value) => String(value).padStart(3, '0'))
+    .filter((code) => !active.has(code));
+  if (available.length === 0) throw new GameServiceError('No quedan códigos libres para crear una sala.', 503);
+  return available[randomInt(available.length)];
 }
 
 function cleanAnswer(value: unknown) {
@@ -202,9 +207,12 @@ export async function createCunadometroRoom(rawName: unknown) {
   const playerToken = createPlayerToken(playerId);
   const db = getDb();
 
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const code = newCode();
+  for (let attempt = 0; attempt < 50; attempt++) {
     try {
+      const activeRooms = await db<Array<{ code: string }>>`
+        SELECT code FROM cunadometro_rooms WHERE status <> 'finished'
+      `;
+      const code = newCode(activeRooms.map((room) => room.code));
       await db.begin(async (tx) => {
         const [room] = await tx<Array<{ id: string }>>`
           INSERT INTO cunadometro_rooms (code, status, rounds_limit)
@@ -218,7 +226,7 @@ export async function createCunadometroRoom(rawName: unknown) {
       });
       return { room: await getCunadometroRoom(code, playerId), playerId, playerToken };
     } catch (error) {
-      if (error && typeof error === 'object' && 'code' in error && error.code === '23505' && attempt < 4) continue;
+      if (error && typeof error === 'object' && 'code' in error && error.code === '23505' && attempt < 49) continue;
       return normalizeDatabaseError(error);
     }
   }
@@ -227,13 +235,14 @@ export async function createCunadometroRoom(rawName: unknown) {
 
 export async function joinCunadometroRoom(rawCode: string, rawName: unknown) {
   const code = cleanCode(rawCode);
+  if (!/^\d{3}$/.test(code)) throw new GameServiceError('El código de sala debe tener tres dígitos.');
   const name = cleanName(rawName);
   const playerId = randomUUID();
   const playerToken = createPlayerToken(playerId);
   try {
     await getDb().begin(async (tx) => {
       const [room] = await tx<Array<{ id: string; status: string }>>`
-        SELECT id, status FROM cunadometro_rooms WHERE code = ${code} FOR UPDATE
+        SELECT id, status FROM cunadometro_rooms WHERE code = ${code} AND status = 'waiting' FOR UPDATE
       `;
       if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
       if (room.status !== 'waiting') throw new GameServiceError('La partida ya ha empezado y no admite más gente.', 409);
@@ -269,7 +278,11 @@ export async function getCunadometroRoom(rawCode: string, rawPlayerId: string): 
       round_number: number; game_stage: CunadometroStage;
     }>>`
       SELECT id, code, status, rounds_limit, round_number, game_stage
-      FROM cunadometro_rooms WHERE code = ${code}
+      FROM cunadometro_rooms
+      WHERE code = ${code}
+        AND EXISTS (
+          SELECT 1 FROM cunadometro_players p WHERE p.room_id = cunadometro_rooms.id AND p.id = ${rawPlayerId}::uuid
+        )
     `;
     if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
     const players = await db<Array<{ id: string; name: string; score: number; is_host: boolean; duels_played: number; is_active: boolean }>>`
@@ -426,7 +439,7 @@ export async function startCunadometroRoom(rawCode: string, rawPlayerId: string,
   try {
     await getDb().begin(async (tx) => {
       const [room] = await tx<Array<{ id: string; status: string }>>`
-        SELECT id, status FROM cunadometro_rooms WHERE code = ${code} FOR UPDATE
+        SELECT id, status FROM cunadometro_rooms WHERE code = ${code} AND status <> 'finished' FOR UPDATE
       `;
       if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
       const [host] = await tx<Array<{ is_host: boolean }>>`
@@ -512,7 +525,8 @@ export async function submitCunadometroAnswer(
   try {
     await getDb().begin(async (tx) => {
       const [room] = await tx<Array<{ id: string; status: string; round_number: number; game_stage: CunadometroStage }>>`
-        SELECT id, status, round_number, game_stage FROM cunadometro_rooms WHERE code = ${code} FOR UPDATE
+        SELECT id, status, round_number, game_stage FROM cunadometro_rooms
+        WHERE code = ${code} AND status <> 'finished' FOR UPDATE
       `;
       if (!room || room.status !== 'playing') throw new GameServiceError('Esta partida no acepta respuestas.', room ? 409 : 404);
       const roundNumber = rawRoundNumber === undefined ? room.round_number : Number(rawRoundNumber);
@@ -609,7 +623,8 @@ export async function voteCunadometroAnswer(rawCode: string, rawPlayerId: string
   try {
     await getDb().begin(async (tx) => {
       const [room] = await tx<Array<{ id: string; status: string; round_number: number; game_stage: CunadometroStage }>>`
-        SELECT id, status, round_number, game_stage FROM cunadometro_rooms WHERE code = ${code} FOR UPDATE
+        SELECT id, status, round_number, game_stage FROM cunadometro_rooms
+        WHERE code = ${code} AND status <> 'finished' FOR UPDATE
       `;
       if (!room || room.status !== 'playing') throw new GameServiceError('La partida no está en votación.', room ? 409 : 404);
       const [round] = await tx<Array<{
@@ -686,7 +701,7 @@ export async function nextCunadometroRound(rawCode: string, rawPlayerId: string)
         id: string; status: string; round_number: number; rounds_limit: number; game_stage: CunadometroStage;
       }>>`
         SELECT id, status, round_number, rounds_limit, game_stage
-        FROM cunadometro_rooms WHERE code = ${code} FOR UPDATE
+        FROM cunadometro_rooms WHERE code = ${code} AND status <> 'finished' FOR UPDATE
       `;
       if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
       const [player] = await tx<Array<{ is_host: boolean }>>`
@@ -777,7 +792,12 @@ export async function leaveCunadometroRoom(rawCode: string, rawPlayerId: string)
         id: string; status: string; round_number: number; game_stage: CunadometroStage;
       }>>`
         SELECT id, status, round_number, game_stage
-        FROM cunadometro_rooms WHERE code = ${code} FOR UPDATE
+        FROM cunadometro_rooms
+        WHERE code = ${code}
+          AND EXISTS (
+            SELECT 1 FROM cunadometro_players p WHERE p.room_id = cunadometro_rooms.id AND p.id = ${rawPlayerId}::uuid
+          )
+        FOR UPDATE
       `;
       if (!room) return;
       const [player] = await tx<Array<{ is_host: boolean; is_active: boolean }>>`

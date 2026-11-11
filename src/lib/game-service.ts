@@ -4,7 +4,6 @@ import { GameServiceError } from './game-errors';
 import type { GameRoom, Player, Submission } from './game';
 import { createPlayerToken } from './player-auth';
 
-const CODE_CHARACTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const HAND_SIZE = 7;
 
 type RoomRow = {
@@ -43,7 +42,9 @@ function cleanCustomCard(value: unknown): string {
 
 function cleanCode(value: string): string {
   const code = value.trim().toUpperCase();
-  if (!/^[A-Z2-9]{6}$/.test(code)) throw new GameServiceError('El código de sala debe tener 6 caracteres.');
+  if (!/^\d{3}$/.test(code) && !/^[A-Z2-9]{6}$/.test(code)) {
+    throw new GameServiceError('El código de sala debe tener tres dígitos.');
+  }
   return code;
 }
 
@@ -62,8 +63,12 @@ function readHand(value: unknown): string[] {
   return hand;
 }
 
-function newCode() {
-  return Array.from({ length: 6 }, () => CODE_CHARACTERS[randomInt(CODE_CHARACTERS.length)]).join('');
+function newCode(activeCodes: string[]) {
+  const active = new Set(activeCodes);
+  const available = Array.from({ length: 1000 }, (_, value) => String(value).padStart(3, '0'))
+    .filter((code) => !active.has(code));
+  if (available.length === 0) throw new GameServiceError('No quedan códigos libres para crear una sala.', 503);
+  return available[randomInt(available.length)];
 }
 
 function normalizeDatabaseError(error: unknown): never {
@@ -87,13 +92,14 @@ function normalizeDatabaseError(error: unknown): never {
   throw error;
 }
 
-async function roomRow(code: string, db = getDb()): Promise<RoomRow> {
+async function roomRow(code: string, playerId: string, db = getDb()): Promise<RoomRow> {
   const [room] = await db<RoomRow[]>`
     SELECT r.id, r.code, r.status, r.current_black_card_id, r.round_number, r.rounds_limit,
            r.judge_player_id, c.text AS black_card, c.pick
     FROM rooms r
     JOIN cards c ON c.id = r.current_black_card_id AND c.type = 'black'
     WHERE r.code = ${code}
+      AND EXISTS (SELECT 1 FROM players p WHERE p.room_id = r.id AND p.id = ${playerId}::uuid)
   `;
   if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
   return room;
@@ -104,7 +110,7 @@ export async function getRoomState(rawCode: string, rawPlayerId: string): Promis
   assertUuid(rawPlayerId);
   try {
     const db = getDb();
-    const room = await roomRow(code, db);
+    const room = await roomRow(code, rawPlayerId, db);
     const [players, rows, rerollState] = await Promise.all([
       db<Array<{ id: string; name: string; score: number; is_host: boolean; hand: unknown; custom_card_text: string | null; custom_card_submitted: boolean; is_ready: boolean }>>`
         SELECT p.id, p.name, p.score, p.is_host,
@@ -267,9 +273,12 @@ export async function createRoom(rawName: unknown): Promise<{ room: GameRoom; pl
   const playerToken = createPlayerToken(playerId);
   const db = getDb();
 
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const code = newCode();
+  for (let attempt = 0; attempt < 50; attempt++) {
     try {
+      const activeRooms = await db<Array<{ code: string }>>`
+        SELECT code FROM rooms WHERE status <> 'finished'
+      `;
+      const code = newCode(activeRooms.map((room) => room.code));
       await db.begin(async (tx) => {
         const [black] = await tx<Array<{ id: number }>>`
           SELECT id FROM cards WHERE type = 'black' ORDER BY random() LIMIT 1
@@ -299,7 +308,7 @@ export async function createRoom(rawName: unknown): Promise<{ room: GameRoom; pl
       });
       return { room: await getRoomState(code, playerId), playerId, playerToken };
     } catch (error) {
-      if (error && typeof error === 'object' && 'code' in error && error.code === '23505' && attempt < 4) continue;
+      if (error && typeof error === 'object' && 'code' in error && error.code === '23505' && attempt < 49) continue;
       return normalizeDatabaseError(error);
     }
   }
@@ -308,13 +317,14 @@ export async function createRoom(rawName: unknown): Promise<{ room: GameRoom; pl
 
 export async function joinRoom(rawCode: string, rawName: unknown) {
   const code = cleanCode(rawCode);
+  if (!/^\d{3}$/.test(code)) throw new GameServiceError('El código de sala debe tener tres dígitos.');
   const name = cleanName(rawName);
   const playerId = randomUUID();
   const playerToken = createPlayerToken(playerId);
   try {
     await getDb().begin(async (tx) => {
       const [room] = await tx<Array<{ id: string; status: string; round_number: number; judge_player_id: string | null }>>`
-        SELECT id, status, round_number, judge_player_id FROM rooms WHERE code = ${code} FOR UPDATE
+        SELECT id, status, round_number, judge_player_id FROM rooms WHERE code = ${code} AND status = 'waiting' FOR UPDATE
       `;
       if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
       if (room.status !== 'waiting') throw new GameServiceError('La partida ya ha empezado y no admite más jugadores.', 409);
@@ -353,7 +363,7 @@ export async function prepareRoom(rawCode: string, rawHostId: string) {
   try {
     await getDb().begin(async (tx) => {
       const [room] = await tx<Array<{ id: string; status: string }>>`
-        SELECT id, status FROM rooms WHERE code = ${code} FOR UPDATE
+        SELECT id, status FROM rooms WHERE code = ${code} AND status <> 'finished' FOR UPDATE
       `;
       if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
       if (room.status !== 'waiting') throw new GameServiceError('La sala ya está preparando la partida.', 409);
@@ -383,7 +393,7 @@ export async function submitCustomCard(rawCode: string, rawPlayerId: string, raw
   try {
     await getDb().begin(async (tx) => {
       const [room] = await tx<Array<{ id: string; status: string }>>`
-        SELECT id, status FROM rooms WHERE code = ${code} FOR UPDATE
+        SELECT id, status FROM rooms WHERE code = ${code} AND status <> 'finished' FOR UPDATE
       `;
       if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
       if (room.status !== 'card_creation') {
@@ -423,7 +433,7 @@ export async function setPlayerReady(rawCode: string, rawPlayerId: string, ready
   try {
     await getDb().begin(async (tx) => {
       const [room] = await tx<Array<{ id: string; status: string }>>`
-        SELECT id, status FROM rooms WHERE code = ${code} FOR UPDATE
+        SELECT id, status FROM rooms WHERE code = ${code} AND status <> 'finished' FOR UPDATE
       `;
       if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
       if (room.status !== 'card_creation') {
@@ -455,7 +465,7 @@ export async function startRoom(rawCode: string, rawPlayerId: string, rawRoundsL
   try {
     await getDb().begin(async (tx) => {
       const [room] = await tx<Array<{ id: string; status: string }>>`
-        SELECT id, status FROM rooms WHERE code = ${code} FOR UPDATE
+        SELECT id, status FROM rooms WHERE code = ${code} AND status <> 'finished' FOR UPDATE
       `;
       if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
       const [host] = await tx<Array<{ is_host: boolean }>>`
@@ -547,7 +557,7 @@ export async function submitCards(rawCode: string, rawPlayerId: string, rawCards
     await getDb().begin(async (tx) => {
       const [room] = await tx<Array<{ id: string; status: string; round_number: number; current_black_card_id: number; judge_player_id: string | null }>>`
         SELECT id, status, round_number, current_black_card_id, judge_player_id
-        FROM rooms WHERE code = ${code} FOR UPDATE
+        FROM rooms WHERE code = ${code} AND status <> 'finished' FOR UPDATE
       `;
       if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
       if (room.status !== 'playing' && room.status !== 'judging') throw new GameServiceError('Esta ronda no acepta respuestas.', 409);
@@ -643,7 +653,7 @@ export async function rerollCard(rawCode: string, rawPlayerId: string, rawCardIn
   try {
     await getDb().begin(async (tx) => {
       const [room] = await tx<Array<{ id: string; status: string; round_number: number }>>`
-        SELECT id, status, round_number FROM rooms WHERE code = ${code} FOR UPDATE
+        SELECT id, status, round_number FROM rooms WHERE code = ${code} AND status <> 'finished' FOR UPDATE
       `;
       if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
       if (room.status !== 'playing') {
@@ -728,7 +738,7 @@ export async function castVote(rawCode: string, rawPlayerId: string, rawSubmissi
   try {
     await getDb().begin(async (tx) => {
       const [room] = await tx<Array<{ id: string; status: string; round_number: number; rounds_limit: number }>>`
-        SELECT id, status, round_number, rounds_limit FROM rooms WHERE code = ${code} FOR UPDATE
+        SELECT id, status, round_number, rounds_limit FROM rooms WHERE code = ${code} AND status <> 'finished' FOR UPDATE
       `;
       if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
       if (room.status !== 'judging' && room.status !== 'sudden_vote') {
@@ -835,7 +845,7 @@ export async function nextRound(rawCode: string, rawPlayerId: string) {
   try {
     await getDb().begin(async (tx) => {
       const [room] = await tx<Array<{ id: string; status: string; round_number: number }>>`
-        SELECT id, status, round_number FROM rooms WHERE code = ${code} FOR UPDATE
+        SELECT id, status, round_number FROM rooms WHERE code = ${code} AND status <> 'finished' FOR UPDATE
       `;
       if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
       const [player] = await tx<Array<{ id: string }>>`
@@ -913,7 +923,7 @@ export async function leaveRoom(rawCode: string, rawPlayerId: string) {
   try {
     await getDb().begin(async (tx) => {
       const [room] = await tx<Array<{ id: string; judge_player_id: string | null }>>`
-        SELECT id, judge_player_id FROM rooms WHERE code = ${code} FOR UPDATE
+        SELECT id, judge_player_id FROM rooms WHERE code = ${code} AND status <> 'finished' FOR UPDATE
       `;
       if (!room) return;
       const [player] = await tx<Array<{ is_host: boolean }>>`
@@ -951,7 +961,7 @@ export async function kickPlayer(rawCode: string, rawHostId: string, rawTargetId
   try {
     await getDb().begin(async (tx) => {
       const [room] = await tx<Array<{ id: string; status: string }>>`
-        SELECT id, status FROM rooms WHERE code = ${code} FOR UPDATE
+        SELECT id, status FROM rooms WHERE code = ${code} AND status <> 'finished' FOR UPDATE
       `;
       if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
       if (room.status !== 'waiting' && room.status !== 'card_creation') {

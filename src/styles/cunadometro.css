@@ -491,6 +491,10 @@ button.cu-answer-card:enabled:hover { transform: translate(-2px, -2px) rotate(-.
   opacity: 0;
   visibility: hidden;
 }
+.cu-reveal-mode.cu-results-mode .cu-reveal-board {
+  opacity: 1;
+  visibility: visible;
+}
 .cu-reveal-mode .cu-game-header { min-height: 42px; }
 .cu-reveal-mode .cu-mini-logo { color: #f3f5e8; }
 .cu-reveal-mode .cu-code-pill,
@@ -604,6 +608,13 @@ button.cu-answer-card:enabled:hover { transform: translate(-2px, -2px) rotate(-.
 .cu-reveal-mode .cu-answer-card.is-own-answer {
   background: #e4e6d9;
 }
+.cu-reveal-mode .cu-result-card.is-winner {
+  outline: 5px solid #c8f477;
+  outline-offset: 3px;
+  background: #e4f3c9;
+}
+.cu-reveal-mode .cu-voter-list { justify-content: center; }
+.cu-reveal-mode .cu-voter-list i { border-color: rgba(23, 31, 17, .35); color: #26351d; }
 .cu-reveal-mode .cu-answers.is-duel::before {
   position: absolute;
   z-index: 2;
