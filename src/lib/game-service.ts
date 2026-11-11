@@ -105,7 +105,7 @@ export async function getRoomState(rawCode: string, rawPlayerId: string): Promis
   try {
     const db = getDb();
     const room = await roomRow(code, db);
-    const [players, rows] = await Promise.all([
+    const [players, rows, rerollState] = await Promise.all([
       db<Array<{ id: string; name: string; score: number; is_host: boolean; hand: unknown; custom_card_text: string | null; custom_card_submitted: boolean; is_ready: boolean }>>`
         SELECT p.id, p.name, p.score, p.is_host,
                CASE WHEN p.id = ${rawPlayerId}::uuid THEN p.hand ELSE '[]'::jsonb END AS hand,
@@ -122,6 +122,13 @@ export async function getRoomState(rawCode: string, rawPlayerId: string): Promis
         FROM played_cards
         WHERE room_id = ${room.id} AND round_number = ${room.round_number}
         ORDER BY submission_id, id
+      `,
+      db<Array<{ reroll_used: boolean }>>`
+        SELECT EXISTS (
+          SELECT 1 FROM round_card_rerolls
+          WHERE room_id = ${room.id} AND round_number = ${room.round_number}
+            AND player_id = ${rawPlayerId}
+        ) AS reroll_used
       `,
     ]);
     if (!players.some((player) => player.id === rawPlayerId)) {
@@ -154,8 +161,9 @@ export async function getRoomState(rawCode: string, rawPlayerId: string): Promis
     const revealed = winnerIds.length > 0;
     const voteNumber = room.status === 'sudden_vote' || voteRows.some((vote) => vote.vote_number === 2) ? 2 : 1;
     const currentVotes = voteRows.filter((vote) => vote.vote_number === voteNumber);
+    const firstVotes = voteRows.filter((vote) => vote.vote_number === 1);
     const firstVoteCounts = new Map<string, number>();
-    for (const vote of voteRows.filter((item) => item.vote_number === 1)) {
+    for (const vote of firstVotes) {
       firstVoteCounts.set(vote.submission_id, (firstVoteCounts.get(vote.submission_id) ?? 0) + 1);
     }
     const currentVoteCounts = new Map<string, number>();
@@ -173,14 +181,27 @@ export async function getRoomState(rawCode: string, rawPlayerId: string): Promis
     const voteOptions = room.status === 'sudden_vote'
       ? suddenCandidates
       : Array.from(grouped.keys());
-    const voteCounts = allResponsesSubmitted
+    const votesRevealed = allResponsesSubmitted && (
+      currentVotes.length === players.length
+      || (room.status === 'sudden_vote' && firstVotes.length === players.length)
+    );
+    const revealedVotes = currentVotes.length === players.length
+      ? currentVotes
+      : room.status === 'sudden_vote' && firstVotes.length === players.length
+        ? firstVotes
+        : [];
+    const revealedVoteCounts = new Map<string, number>();
+    for (const vote of revealedVotes) {
+      revealedVoteCounts.set(vote.submission_id, (revealedVoteCounts.get(vote.submission_id) ?? 0) + 1);
+    }
+    const voteCounts = votesRevealed
       ? Object.fromEntries(Array.from(grouped.keys(), (submissionId) => [
           submissionId,
-          currentVoteCounts.get(submissionId) ?? 0,
+          revealedVoteCounts.get(submissionId) ?? 0,
         ]))
       : {};
-    const publicVotes = allResponsesSubmitted
-      ? currentVotes.map((vote) => ({
+    const publicVotes = votesRevealed
+      ? revealedVotes.map((vote) => ({
           voterId: vote.voter_player_id,
           voterName: vote.voter_name,
           submissionId: vote.submission_id,
@@ -230,6 +251,8 @@ export async function getRoomState(rawCode: string, rawPlayerId: string): Promis
       voteOptions,
       voteCounts,
       publicVotes,
+      votesRevealed,
+      myRerollUsed: rerollState[0]?.reroll_used ?? false,
       winnerIds,
       winnerId: winnerIds[0] ?? null,
     };
@@ -556,6 +579,80 @@ export async function submitCards(rawCode: string, rawPlayerId: string, rawCards
   }
 }
 
+export async function rerollCard(rawCode: string, rawPlayerId: string, rawCardIndex: unknown) {
+  const code = cleanCode(rawCode);
+  assertUuid(rawPlayerId);
+  if (typeof rawCardIndex !== 'number' || !Number.isSafeInteger(rawCardIndex) || rawCardIndex < 0) {
+    throw new GameServiceError('Selecciona una carta válida para cambiar.');
+  }
+  const cardIndex = rawCardIndex;
+
+  try {
+    await getDb().begin(async (tx) => {
+      const [room] = await tx<Array<{ id: string; status: string; round_number: number }>>`
+        SELECT id, status, round_number FROM rooms WHERE code = ${code} FOR UPDATE
+      `;
+      if (!room) throw new GameServiceError('No encontramos esa sala.', 404);
+      if (room.status !== 'playing') {
+        throw new GameServiceError('Solo puedes cambiar una carta antes de enviar tu respuesta.', 409);
+      }
+
+      const [player] = await tx<Array<{ hand: unknown }>>`
+        SELECT hand FROM players WHERE id = ${rawPlayerId} AND room_id = ${room.id} FOR UPDATE
+      `;
+      if (!player) throw new GameServiceError('No formas parte de esta sala.', 403);
+      const hand = readHand(player.hand);
+      if (cardIndex >= hand.length) throw new GameServiceError('Esa carta ya no está en tu mano.', 409);
+
+      const [alreadySubmitted] = await tx<Array<{ exists: boolean }>>`
+        SELECT EXISTS (
+          SELECT 1 FROM played_cards
+          WHERE room_id = ${room.id} AND round_number = ${room.round_number} AND player_id = ${rawPlayerId}
+        ) AS exists
+      `;
+      if (alreadySubmitted?.exists) {
+        throw new GameServiceError('Ya has enviado tu respuesta; no puedes cambiar más cartas esta ronda.', 409);
+      }
+
+      const [alreadyRerolled] = await tx<Array<{ exists: boolean }>>`
+        SELECT EXISTS (
+          SELECT 1 FROM round_card_rerolls
+          WHERE room_id = ${room.id} AND round_number = ${room.round_number} AND player_id = ${rawPlayerId}
+        ) AS exists
+      `;
+      if (alreadyRerolled?.exists) {
+        throw new GameServiceError('Ya has cambiado una carta en esta ronda.', 409);
+      }
+
+      const [replacement] = await tx<Array<{ text: string }>>`
+        SELECT card.text
+        FROM cards AS card
+        WHERE card.type = 'white'
+          AND card.text <> ALL(${hand}::text[])
+        ORDER BY random()
+        LIMIT 1
+      `;
+      if (!replacement) throw new GameServiceError('No hay cartas blancas nuevas disponibles para cambiar.', 503);
+
+      await tx`
+        INSERT INTO round_card_rerolls (room_id, round_number, player_id)
+        VALUES (${room.id}, ${room.round_number}, ${rawPlayerId})
+      `;
+      hand[cardIndex] = replacement.text;
+      await tx`
+        UPDATE players SET hand = ${JSON.stringify(hand)}::jsonb
+        WHERE id = ${rawPlayerId} AND room_id = ${room.id}
+      `;
+    });
+    return getRoomState(code, rawPlayerId);
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === '23505') {
+      throw new GameServiceError('Ya has cambiado una carta en esta ronda.', 409);
+    }
+    return normalizeDatabaseError(error);
+  }
+}
+
 export async function castVote(rawCode: string, rawPlayerId: string, rawSubmissionId: string) {
   const code = cleanCode(rawCode);
   assertUuid(rawPlayerId);
@@ -651,6 +748,8 @@ export async function castVote(rawCode: string, rawPlayerId: string, rawSubmissi
       }
       if (room.round_number >= room.rounds_limit) {
         await tx`UPDATE rooms SET status = 'finished' WHERE id = ${room.id}`;
+      } else if (voteNumber === 2) {
+        await tx`UPDATE rooms SET status = 'judging' WHERE id = ${room.id}`;
       }
     });
     return getRoomState(code, rawPlayerId);

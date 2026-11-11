@@ -43,6 +43,8 @@ export type GameRoom = {
   voteOptions: string[];
   voteCounts: Record<string, number>;
   publicVotes: PublicVote[];
+  votesRevealed: boolean;
+  myRerollUsed: boolean;
   winnerIds: string[];
   winnerId: string | null;
 };
@@ -109,6 +111,14 @@ export async function submitCards(code: string, playerId: string, playerToken: s
     method: 'POST',
     headers: authenticated(playerToken),
     body: JSON.stringify({ playerId, cards }),
+  });
+}
+
+export async function rerollCard(code: string, playerId: string, playerToken: string, cardIndex: number) {
+  return request<{ room: GameRoom }>(`/api/rooms/${encodeURIComponent(code)}/reroll`, {
+    method: 'POST',
+    headers: authenticated(playerToken),
+    body: JSON.stringify({ playerId, cardIndex }),
   });
 }
 

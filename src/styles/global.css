@@ -137,10 +137,14 @@ button:focus-visible, input:focus-visible { outline: 2px solid #06b6d4; outline-
 .hand-heading h3 { font-size: 12px; }
 .hand-count { color: #777080; font-size: 8px; letter-spacing: .09em; }
 .hand-cards { display: flex; gap: 9px; overflow-x: auto; padding: 3px 2px 12px; scrollbar-color: #584268 #17141e; scrollbar-width: thin; }
-.hand-card { display: flex; min-width: 145px; width: 145px; min-height: 116px; flex-direction: column; align-items: flex-start; gap: 12px; padding: 11px; border: 1px solid #ddd7cc; border-radius: 7px; color: #292530; background: #f6f2e9; text-align: left; font-size: 10px; font-weight: 600; line-height: 1.4; box-shadow: 0 4px 10px rgba(0,0,0,.17); transition: transform .2s,border-color .2s,box-shadow .2s; }
+.hand-card-wrap { display: flex; flex: 0 0 145px; width: 145px; flex-direction: column; gap: 5px; }
+.hand-card { display: flex; min-width: 0; width: 100%; min-height: 116px; flex-direction: column; align-items: flex-start; gap: 12px; padding: 11px; border: 1px solid #ddd7cc; border-radius: 7px; color: #292530; background: #f6f2e9; text-align: left; font-size: 10px; font-weight: 600; line-height: 1.4; box-shadow: 0 4px 10px rgba(0,0,0,.17); transition: transform .2s,border-color .2s,box-shadow .2s; }
 .hand-card:hover { transform: translateY(-5px) rotate(-1deg); }
 .hand-card.selected-card { transform: translateY(-7px); border-color: #c084fc; box-shadow: 0 0 0 2px #a855f7,0 0 20px rgba(168,85,247,.4); }
 .hand-card-index { color: #938b9a; font-size: 7px; letter-spacing: .09em; }
+.reroll-card-button { min-height: 25px; border: 1px solid #514062; border-radius: 5px; color: #d8b4fe; background: #211a2c; font-family: 'DM Mono',monospace; font-size: 8px; letter-spacing: .04em; transition: background .2s,border-color .2s,transform .2s; }
+.reroll-card-button:hover:not(:disabled) { transform: translateY(-1px); border-color: #a855f7; background: #30213e; }
+.reroll-card-button:disabled { cursor: wait; opacity: .6; }
 .hand-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .hand-footer>span { color: #756f7e; font-size: 8px; }
 .submit-button { min-height: 37px; font-size: 10px; }
@@ -406,7 +410,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #06b6d4; outline-
   .hand-heading h3 { font-size: 12px; }
   .hand-count { font-size: 8px; }
   .hand-cards { gap: 9px; margin-right: -16px; padding: 3px 16px 9px 2px; scroll-snap-type: x mandatory; }
-  .hand-card { min-width: 137px; width: 137px; min-height: 115px; padding: 12px; border-radius: 12px; font-size: 11px; scroll-snap-align: start; }
+  .hand-card-wrap { flex-basis: 137px; width: 137px; scroll-snap-align: start; }
+  .hand-card { min-width: 0; width: 100%; min-height: 115px; padding: 12px; border-radius: 12px; font-size: 11px; }
   .hand-card:active { transform: scale(.96); }
   .hand-card.selected-card { transform: translateY(-5px) rotate(-1deg); }
   .hand-footer>span { max-width: 53%; font-size: 8px; line-height: 1.4; }

@@ -6,6 +6,7 @@ import {
   leaveRoom as leaveRoomRequest,
   nextRound as nextRoundRequest,
   prepareRoom as prepareRoomRequest,
+  rerollCard as rerollCardRequest,
   setReady as setReadyRequest,
   startRoom as startRoomRequest,
   submitCustomCard as submitCustomCardRequest,
@@ -40,6 +41,7 @@ export default function GameArena({ initialRoom, playerId, playerToken, onLeave 
     && (room.status === 'judging' || room.status === 'sudden_vote')
     && room.myVoteId === null
     && room.winnerIds.length === 0;
+  const canReroll = room.status === 'playing' && !hasSubmitted && !room.myRerollUsed;
 
   useEffect(() => {
     if (savedCustomCard !== null) setCustomCardText(savedCustomCard);
@@ -123,6 +125,11 @@ export default function GameArena({ initialRoom, playerId, playerToken, onLeave 
 
   async function voteForSubmission(submissionId: string) {
     await runAction(() => voteForSubmissionRequest(room.code, playerId, playerToken, submissionId));
+  }
+
+  async function rerollHandCard(cardIndex: number) {
+    if (!canReroll) return;
+    await runAction(() => rerollCardRequest(room.code, playerId, playerToken, cardIndex));
   }
 
   async function startNextRound() {
@@ -445,36 +452,46 @@ export default function GameArena({ initialRoom, playerId, playerToken, onLeave 
                         {voteCount !== undefined ? ` · ${voteCount} ${voteCount === 1 ? 'VOTO' : 'VOTOS'}` : ''}
                       </span>
                       <span>{submission.cards.join(' + ')}</span>
-                      <div className="vote-receipts" aria-label={`${voteCount ?? 0} votos visibles`}>
+                      <div className="vote-receipts" aria-label={room.votesRevealed ? `${voteCount ?? 0} votos visibles` : 'Votos ocultos hasta que termine la votación'}>
                         <div className="vote-receipts-heading">
-                          <span className="vote-receipts-label">QUIÉN HA VOTADO</span>
+                          <span className="vote-receipts-label">{room.votesRevealed
+                            ? room.status === 'sudden_vote' && room.winnerIds.length === 0
+                              ? 'VOTOS DE LA PRIMERA VOTACIÓN'
+                              : 'QUIÉN HA VOTADO'
+                            : 'VOTOS EN SECRETO'}</span>
                           <span className="vote-receipts-count" key={`${submission.id}-${voteCount ?? 0}`}>
-                            {voteCount ?? 0} {voteCount === 1 ? 'VOTO' : 'VOTOS'}
+                            {room.votesRevealed
+                              ? `${voteCount ?? 0} ${voteCount === 1 ? 'VOTO' : 'VOTOS'}`
+                              : `${room.votesSubmittedCount}/${room.eligibleVoterCount}`}
                           </span>
                         </div>
-                        {room.publicVotes.some((vote) => vote.submissionId === submission.id) ? (
-                          <div className="vote-receipts-list">
-                            {room.publicVotes
-                              .filter((vote) => vote.submissionId === submission.id)
-                              .map((vote) => {
-                                const voterIndex = room.players.findIndex((item) => item.id === vote.voterId);
-                                return (
-                                  <span
-                                    className="vote-receipt"
-                                    key={vote.voterId}
-                                    title={`${vote.voterName} ha votado esta respuesta`}
-                                    style={{ animationDelay: `${Math.min(voterIndex, 8) * 55}ms` }}
-                                  >
-                                    <span className={`vote-receipt-avatar avatar-${Math.max(0, voterIndex) % 4}`}>
-                                      {vote.voterName.trim().charAt(0).toUpperCase()}
+                        {room.votesRevealed ? (
+                          room.publicVotes.some((vote) => vote.submissionId === submission.id) ? (
+                            <div className="vote-receipts-list">
+                              {room.publicVotes
+                                .filter((vote) => vote.submissionId === submission.id)
+                                .map((vote) => {
+                                  const voterIndex = room.players.findIndex((item) => item.id === vote.voterId);
+                                  return (
+                                    <span
+                                      className="vote-receipt"
+                                      key={vote.voterId}
+                                      title={`${vote.voterName} ha votado esta respuesta`}
+                                      style={{ animationDelay: `${Math.min(voterIndex, 8) * 55}ms` }}
+                                    >
+                                      <span className={`vote-receipt-avatar avatar-${Math.max(0, voterIndex) % 4}`}>
+                                        {vote.voterName.trim().charAt(0).toUpperCase()}
+                                      </span>
+                                      {vote.voterName}
                                     </span>
-                                    {vote.voterName}
-                                  </span>
-                                );
-                              })}
-                          </div>
+                                  );
+                                })}
+                            </div>
+                          ) : (
+                            <span className="vote-receipts-empty">Nadie ha votado esta respuesta</span>
+                          )
                         ) : (
-                          <span className="vote-receipts-empty">Aún sin votos · que empiece el salseo</span>
+                          <span className="vote-receipts-empty">Los votos se revelan cuando todo el mundo haya votado</span>
                         )}
                       </div>
                       {room.winnerIds.length > 0 && <small>{isWinner ? `🏆 ${owner?.name} gana esta ronda` : `De ${owner?.name ?? 'jugador/a'}`}</small>}
@@ -502,20 +519,40 @@ export default function GameArena({ initialRoom, playerId, playerToken, onLeave 
         <div className="hand-heading"><div><span className="section-kicker">TU MANO</span><h3>{hasSubmitted ? 'Mano repuesta · ya puedes votar' : room.status === 'playing' ? `Elige ${room.pick} carta${room.pick === 1 ? '' : 's'} blanca${room.pick === 1 ? '' : 's'}` : 'Esperando a la siguiente ronda'}</h3></div><span className="hand-count">{player.hand.length} / 7 CARTAS</span></div>
         <div className="hand-cards">
           {player.hand.map((card, index) => (
-            <button
-              type="button"
-              className={`hand-card ${selectedCards.includes(index) ? 'selected-card' : ''}`}
-              key={`${card}-${index}`}
-              onClick={() => toggleCard(index)}
-              disabled={hasSubmitted || room.status !== 'playing'}
-              aria-pressed={selectedCards.includes(index)}
-            >
-              <span className="hand-card-index">CARTA {String(index + 1).padStart(2, '0')}</span>{card}
-            </button>
+            <div className="hand-card-wrap" key={`${card}-${index}`}>
+              <button
+                type="button"
+                className={`hand-card ${selectedCards.includes(index) ? 'selected-card' : ''}`}
+                onClick={() => toggleCard(index)}
+                disabled={hasSubmitted || room.status !== 'playing' || actionPending}
+                aria-pressed={selectedCards.includes(index)}
+              >
+                <span className="hand-card-index">CARTA {String(index + 1).padStart(2, '0')}</span>{card}
+              </button>
+              {canReroll && (
+                <button
+                  type="button"
+                  className="reroll-card-button"
+                  onClick={() => void rerollHandCard(index)}
+                  disabled={actionPending}
+                  aria-label={`Cambiar la carta ${index + 1}`}
+                >
+                  ↻ CAMBIAR
+                </button>
+              )}
+            </div>
           ))}
         </div>
         <div className="hand-footer">
-          <span>{hasSubmitted ? 'Has recibido una carta nueva por cada carta jugada.' : selectedCards.length === room.pick ? 'Selección lista para jugar' : `Selecciona ${room.pick - selectedCards.length} carta${room.pick - selectedCards.length === 1 ? '' : 's'} más`}</span>
+          <span>{hasSubmitted
+            ? 'Has recibido una carta nueva por cada carta jugada.'
+            : room.status === 'playing' && room.myRerollUsed
+              ? 'Cambio usado · tendrás otro en la próxima ronda.'
+              : room.status === 'playing' && !room.myRerollUsed
+                ? 'Puedes cambiar una carta esta ronda antes de jugar.'
+                : selectedCards.length === room.pick
+                  ? 'Selección lista para jugar'
+                  : `Selecciona ${room.pick - selectedCards.length} carta${room.pick - selectedCards.length === 1 ? '' : 's'} más`}</span>
           <button className="button button-primary submit-button" disabled={selectedCards.length !== room.pick || room.status !== 'playing'} onClick={() => void submitCard()}>Jugar carta <span>↗</span></button>
         </div>
       </section>

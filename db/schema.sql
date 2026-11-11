@@ -1,5 +1,5 @@
 -- Apply once to the existing Neon database from its SQL Editor.
--- These additions track the round, judge, and grouped multi-card submissions.
+-- These additions track rounds, judges, grouped submissions, and card rerolls.
 
 ALTER TABLE rooms
   ADD COLUMN IF NOT EXISTS round_number integer NOT NULL DEFAULT 1,
@@ -18,6 +18,14 @@ CREATE TABLE IF NOT EXISTS round_votes (
   submission_id uuid NOT NULL,
   created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (room_id, round_number, vote_number, voter_player_id)
+);
+
+CREATE TABLE IF NOT EXISTS round_card_rerolls (
+  room_id uuid NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+  round_number integer NOT NULL CHECK (round_number > 0),
+  player_id uuid NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (room_id, round_number, player_id)
 );
 
 CREATE TABLE IF NOT EXISTS room_custom_cards (
