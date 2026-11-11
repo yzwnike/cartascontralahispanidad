@@ -1,8 +1,17 @@
-# Cartas Caos
+# Tokatloscojones
+
+## Hub de juegos
+
+La portada (`/`) es un selector para los juegos independientes del proyecto:
+
+- `/cartas/` abre Cartas Contra la Hispanidad y sus salas existentes.
+- `/cunadometro/` abre Cuñadómetro, con salas, rondas de duelos aleatorios y retos en los que responde todo el grupo.
+
+Cuñadómetro alterna automáticamente entre sus dos modalidades. Para jugar un duelo hacen falta al menos tres personas; en las rondas de grupo responde todo el mundo. Las consignas son originales y los votos se revelan al cerrar cada votación.
 
 ## Conectar Neon
 
-1. En Neon, abre **SQL Editor** y ejecuta [`db/schema.sql`](./db/schema.sql). El script añade las columnas de ronda, las tablas de votos y cartas personalizadas, y carga un mazo inicial sin duplicar cartas ya presentes.
+1. En Neon, abre **SQL Editor** y ejecuta [`db/schema.sql`](./db/schema.sql). El script añade las tablas de partidas, rondas, respuestas y votos de Cuñadómetro, el historial antirrepetición de cartas, y carga un mazo inicial sin duplicar cartas ya presentes.
 2. Para desarrollo local, copia [`.env.example`](./.env.example) a `.env` en la raíz y rellena `DATABASE_URL` con la cadena PostgreSQL de Neon. Conserva `sslmode=require`.
 3. Genera un secreto de sesión localmente, sin compartirlo:
 
@@ -39,5 +48,12 @@ No uses variables `PUBLIC_` para estas credenciales. La URL de Neon y el secreto
 - `POST /api/rooms/:code/vote` registra el voto; nadie puede votar su propia respuesta.
 - `POST /api/rooms/:code/next` abre la siguiente ronda cuando se resuelve la votación.
 - `DELETE /api/rooms/:code/players/:playerId` abandona la sala.
+- `POST /api/cunadometro/rooms` y `POST /api/cunadometro/rooms/:code/join` crean o abren una sala independiente de Cuñadómetro.
+- `POST /api/cunadometro/rooms/:code/start` inicia una partida de 5, 10 o 20 rondas.
+- `POST /api/cunadometro/rooms/:code/answer`, `/vote` y `/next` gestionan las respuestas, votaciones y rondas.
+- `GET /api/cunadometro/rooms/:code?playerId=...` obtiene el estado de la partida; las respuestas se mantienen ocultas hasta que el grupo termine de escribir.
+- `DELETE /api/cunadometro/rooms/:code/players/:playerId` permite salir antes de empezar o al terminar; la partida en curso queda protegida contra abandonos que la bloqueen.
 
 Las operaciones de estado usan transacciones y requieren el token de sesión que reciben los endpoints de creación/unión. La interfaz consulta el estado de la sala periódicamente para sincronizar a los participantes. Antes de empezar, cada persona escribe una carta blanca exclusiva de esa partida y marca que está lista; el anfitrión puede iniciar cuando todo el mundo esté listo. Todas las cartas personalizadas se reparten al comienzo a otro jugador, una por mano, y nunca se añaden al mazo global. Todas las personas juegan y votan; las respuestas no revelan a sus autores hasta cerrar la votación y los votos permanecen ocultos hasta que todo el mundo haya votado. Si hay empate, se repite el voto entre las respuestas empatadas en una **votación súbita**; si persiste, todas las respuestas empatadas suman un punto. Cada jugador puede cambiar una carta de su mano por ronda antes de responder, y recupera su oportunidad en la ronda siguiente. Las cartas que ya recibió un jugador, incluidas las jugadas y las cambiadas, no se le vuelven a repartir durante esa partida. Cada mano se repone hasta siete cartas en cuanto se juega una respuesta; si se agotan las cartas blancas nuevas, la operación informa del agotamiento en lugar de repartir un duplicado. Al cerrar la última ronda, la sala pasa a `finished` y muestra el ganador y la clasificación final.
+
+Cuñadómetro mantiene sus salas, puntuaciones y respuestas en tablas separadas de las partidas de cartas. En los duelos responden dos participantes y vota el resto; en las rondas abiertas responde y vota todo el grupo. La modalidad alterna entre rondas, y los empates otorgan un punto a cada respuesta más votada.

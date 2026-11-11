@@ -37,6 +37,65 @@ CREATE TABLE IF NOT EXISTS room_player_white_cards (
   PRIMARY KEY (room_id, player_id, card_key)
 );
 
+CREATE TABLE IF NOT EXISTS cunadometro_rooms (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  code varchar(6) NOT NULL UNIQUE,
+  status varchar(20) NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'playing', 'finished')),
+  round_number integer NOT NULL DEFAULT 0,
+  rounds_limit integer NOT NULL DEFAULT 10 CHECK (rounds_limit IN (5, 10, 20)),
+  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS cunadometro_players (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  room_id uuid NOT NULL REFERENCES cunadometro_rooms(id) ON DELETE CASCADE,
+  name varchar(20) NOT NULL,
+  score integer NOT NULL DEFAULT 0,
+  is_host boolean NOT NULL DEFAULT false,
+  duels_played integer NOT NULL DEFAULT 0,
+  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS cunadometro_rounds (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  room_id uuid NOT NULL REFERENCES cunadometro_rooms(id) ON DELETE CASCADE,
+  round_number integer NOT NULL,
+  mode varchar(20) NOT NULL CHECK (mode IN ('duel', 'all_play')),
+  prompt_text text NOT NULL,
+  status varchar(20) NOT NULL DEFAULT 'answering' CHECK (status IN ('answering', 'voting', 'resolved')),
+  duel_player_ids uuid[] NOT NULL DEFAULT '{}'::uuid[],
+  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (room_id, round_number)
+);
+
+CREATE TABLE IF NOT EXISTS cunadometro_answers (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  room_id uuid NOT NULL REFERENCES cunadometro_rooms(id) ON DELETE CASCADE,
+  round_number integer NOT NULL,
+  player_id uuid NOT NULL REFERENCES cunadometro_players(id) ON DELETE CASCADE,
+  answer_text varchar(180) NOT NULL CHECK (char_length(btrim(answer_text)) BETWEEN 2 AND 180),
+  is_winner boolean NOT NULL DEFAULT false,
+  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (room_id, round_number, player_id),
+  FOREIGN KEY (room_id, round_number) REFERENCES cunadometro_rounds(room_id, round_number) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS cunadometro_votes (
+  room_id uuid NOT NULL REFERENCES cunadometro_rooms(id) ON DELETE CASCADE,
+  round_number integer NOT NULL,
+  voter_player_id uuid NOT NULL REFERENCES cunadometro_players(id) ON DELETE CASCADE,
+  answer_id uuid NOT NULL REFERENCES cunadometro_answers(id) ON DELETE CASCADE,
+  created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (room_id, round_number, voter_player_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS cunadometro_players_unique_name_idx
+  ON cunadometro_players (room_id, lower(name));
+CREATE INDEX IF NOT EXISTS cunadometro_answers_round_idx
+  ON cunadometro_answers (room_id, round_number, created_at);
+CREATE INDEX IF NOT EXISTS cunadometro_votes_round_idx
+  ON cunadometro_votes (room_id, round_number, answer_id);
+
 INSERT INTO room_player_white_cards (room_id, player_id, card_key, card_text)
 SELECT room_id, player_id, lower(btrim(card_text)), card_text
 FROM played_cards

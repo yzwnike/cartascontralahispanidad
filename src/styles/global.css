@@ -67,6 +67,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #06b6d4; outline-
 .lobby-hint { display: flex; gap: 8px; margin: 18px 0 0; color: #767080; font-size: 9px; line-height: 1.6; }
 .lobby-hint span { color: #06b6d4; }
 .page-footer { display: flex; justify-content: space-between; max-width: 690px; margin: 27px 0 22px; color: #5e5968; font-size: 8px; letter-spacing: .08em; }
+.page-footer>a { color: #817a8e; text-decoration: none; transition: color .2s; }
+.page-footer>a:hover { color: #c084fc; }
 .footer-note { color: #817a8e; letter-spacing: 0; font-family: 'Space Grotesk',sans-serif; font-size: 11px; }
 
 .game-shell { max-width: 1220px; margin: 44px auto; padding: 20px; border: 1px solid rgba(168,85,247,.23); border-radius: 16px; background: rgba(17,15,24,.96); box-shadow: 0 0 60px rgba(168,85,247,.09); }

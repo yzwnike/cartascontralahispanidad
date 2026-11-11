@@ -1,0 +1,36 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import RoomLobby from '../../components/RoomLobby';
+---
+
+<Layout>
+  <main class="site-shell">
+    <div class="ambient ambient-purple" aria-hidden="true"></div>
+    <div class="ambient ambient-cyan" aria-hidden="true"></div>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Volver al selector de juegos">
+        <span class="brand-mark">CC</span>
+        <span>CARTAS<span class="brand-accent">CAOS</span></span>
+      </a>
+      <div class="topbar-status"><span class="status-dot"></span> SERVIDOR EN CAOS</div>
+    </header>
+
+    <section class="hero">
+      <p class="eyebrow"><span>✳</span> MADE BY YAZAWA</p>
+      <h1>Tu grupo.<br /><span>Sus peores ideas.</span></h1>
+      <p class="hero-copy">
+        Completa la frase, defiende tu respuesta y descubre quién tiene el humor más cuestionable.
+      </p>
+      <div class="hero-meta">
+        <span>01 — CREA UNA SALA</span><i></i><span>02 — INVITA A TU GENTE</span><i></i><span>03 — LÍA EL SALSEO</span>
+      </div>
+    </section>
+
+    <RoomLobby client:load />
+
+    <footer class="page-footer">
+      <a href="/">← VOLVER A TODOS LOS JUEGOS</a>
+      <span class="footer-note">Sin filtros. Sin rencores. Casi siempre.</span>
+    </footer>
+  </main>
+</Layout>

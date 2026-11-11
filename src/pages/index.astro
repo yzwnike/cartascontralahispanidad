@@ -1,36 +1,77 @@
 ---
 import Layout from '../layouts/Layout.astro';
-import RoomLobby from '../components/RoomLobby';
+import '../styles/hub.css';
 ---
 
-<Layout>
-  <main class="site-shell">
-    <div class="ambient ambient-purple" aria-hidden="true"></div>
-    <div class="ambient ambient-cyan" aria-hidden="true"></div>
-    <header class="topbar">
-      <a class="brand" href="/" aria-label="Cartas Caos, inicio">
-        <span class="brand-mark">CC</span>
-        <span>CARTAS<span class="brand-accent">CAOS</span></span>
+<Layout
+  title="Tokatloscojones — Made by Yazawa"
+  description="Elige un juego, reúne a tu gente y que empiece el caos."
+>
+  <main class="hub">
+    <div class="hub-orb hub-orb-violet" aria-hidden="true"></div>
+    <div class="hub-orb hub-orb-orange" aria-hidden="true"></div>
+
+    <header class="hub-header">
+      <a class="hub-brand" href="/" aria-label="Tokatloscojones">
+        <span class="hub-brand-icon">T</span>
+        <span><strong>TOKATLOSCOJONES</strong></span>
       </a>
-      <div class="topbar-status"><span class="status-dot"></span> SERVIDOR EN CAOS</div>
+      <span class="hub-status"><i></i> TU SALA DE JUEGOS</span>
     </header>
 
-    <section class="hero">
-      <p class="eyebrow"><span>✳</span> MADE BY YAZAWA</p>
-      <h1>Tu grupo.<br /><span>Sus peores ideas.</span></h1>
-      <p class="hero-copy">
-        Completa la frase, defiende tu respuesta y descubre quién tiene el humor más cuestionable.
-      </p>
-      <div class="hero-meta">
-        <span>01 — CREA UNA SALA</span><i></i><span>02 — INVITA A TU GENTE</span><i></i><span>03 — LÍA EL SALSEO</span>
-      </div>
+    <section class="hub-intro">
+      <p class="hub-eyebrow">ELIGE TU PROPIA MOVIDA <span>✳</span></p>
+      <h1>¿A qué<br /><span>jugamos hoy?</span></h1>
+      <p>Un grupo, un código y cero garantías de que alguien conserve la dignidad.</p>
     </section>
 
-    <RoomLobby client:load />
+    <section class="game-shelf" aria-label="Catálogo de juegos">
+      <a class="game-tile cards-tile" href="/cartas/">
+        <div class="tile-art cards-art" aria-hidden="true">
+          <span class="floating-card card-back">¿Quién ha<br />hecho esto?</span>
+          <span class="floating-card card-front">Un Bizum<br />de 2,35 €</span>
+          <span class="tile-spark">✳</span>
+        </div>
+        <div class="tile-info">
+          <span class="tile-index">01 / HUMOR NEGRO</span>
+          <h2>Cartas contra<br />la Hispanidad</h2>
+          <p>Completa la frase. Defiende lo indefendible. Vota con tus colegas.</p>
+          <span class="tile-cta">ABRIR JUEGO <b>↗</b></span>
+        </div>
+        <span class="tile-glow" aria-hidden="true"></span>
+      </a>
 
-    <footer class="page-footer">
-      <span>HECHO PARA JUGAR CON TU GENTE</span>
-      <span class="footer-note">Sin filtros. Sin rencores. Casi siempre.</span>
+      <a class="game-tile quips-tile" href="/cunadometro/">
+        <div class="tile-art quips-art" aria-hidden="true">
+          <span class="speech-bubble bubble-one">¿Y si…?</span>
+          <span class="speech-bubble bubble-two">JA, JA, JA</span>
+          <span class="quips-orbit orbit-one"></span>
+          <span class="quips-orbit orbit-two"></span>
+          <span class="quips-star">✦</span>
+        </div>
+        <div class="tile-info">
+          <span class="tile-index">02 / INGENIO EN GRUPO</span>
+          <h2>Cuñadómetro</h2>
+          <p>Duelos de ocurrencias y retos donde todo el grupo se viene arriba.</p>
+          <span class="tile-cta">ABRIR JUEGO <b>↗</b></span>
+        </div>
+        <span class="tile-glow" aria-hidden="true"></span>
+      </a>
+
+      <article class="game-tile coming-tile" aria-label="Más juegos próximamente">
+        <div class="coming-art" aria-hidden="true"><span>＋</span><i></i><i></i><i></i></div>
+        <div class="tile-info">
+          <span class="tile-index">PRÓXIMAMENTE</span>
+          <h2>La próxima<br />locura</h2>
+          <p>Más juegos para beber, reír y discutir las reglas.</p>
+          <span class="tile-cta">EN LA RECÁMARA <b>…</b></span>
+        </div>
+      </article>
+    </section>
+
+    <footer class="hub-footer">
+      <span>HECHO PARA JUGAR JUNTOS, AUNQUE SEA EN REMOTO</span>
+      <span>MADE BY YAZAWA <i>✳</i></span>
     </footer>
   </main>
 </Layout>
