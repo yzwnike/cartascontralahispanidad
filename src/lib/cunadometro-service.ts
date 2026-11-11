@@ -94,7 +94,8 @@ async function resolveRound(tx: Transaction, roomId: string, roundNumber: number
     await tx`UPDATE cunadometro_rooms SET game_stage = 'middle_ranking' WHERE id = ${roomId}`;
   } else if (phase === 'final_general') {
     await tx`
-      UPDATE cunadometro_rooms SET game_stage = 'final_ranking', status = 'finished'
+      UPDATE cunadometro_rooms
+      SET game_stage = 'final_ranking', status = 'finished', finished_at = now()
       WHERE id = ${roomId}
     `;
   }
@@ -209,11 +210,14 @@ export async function createCunadometroRoom(rawName: unknown) {
 
   for (let attempt = 0; attempt < 50; attempt++) {
     try {
-      const activeRooms = await db<Array<{ code: string }>>`
-        SELECT code FROM cunadometro_rooms WHERE status <> 'finished'
-      `;
-      const code = newCode(activeRooms.map((room) => room.code));
+      let code = '';
       await db.begin(async (tx) => {
+        await tx`
+          DELETE FROM cunadometro_rooms
+          WHERE status = 'finished' AND finished_at < now() - interval '24 hours'
+        `;
+        const existingRooms = await tx<Array<{ code: string }>>`SELECT code FROM cunadometro_rooms`;
+        code = newCode(existingRooms.map((room) => room.code));
         const [room] = await tx<Array<{ id: string }>>`
           INSERT INTO cunadometro_rooms (code, status, rounds_limit)
           VALUES (${code}, 'waiting', 10)
@@ -766,7 +770,7 @@ export async function nextCunadometroRound(rawCode: string, rawPlayerId: string)
         return;
       }
       if (room.round_number >= room.rounds_limit) {
-        await tx`UPDATE cunadometro_rooms SET status = 'finished' WHERE id = ${room.id}`;
+        await tx`UPDATE cunadometro_rooms SET status = 'finished', finished_at = now() WHERE id = ${room.id}`;
         return;
       }
       const players = await tx<RoundPlayer[]>`
@@ -847,7 +851,8 @@ export async function leaveCunadometroRoom(rawCode: string, rawPlayerId: string)
       `;
       if (activePlayers.length < 3) {
         await tx`
-          UPDATE cunadometro_rooms SET status = 'finished', game_stage = 'final_ranking'
+          UPDATE cunadometro_rooms
+          SET status = 'finished', game_stage = 'final_ranking', finished_at = now()
           WHERE id = ${room.id}
         `;
         return;

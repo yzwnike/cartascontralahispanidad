@@ -4,11 +4,10 @@
 ALTER TABLE rooms
   ADD COLUMN IF NOT EXISTS round_number integer NOT NULL DEFAULT 1,
   ADD COLUMN IF NOT EXISTS rounds_limit integer NOT NULL DEFAULT 5,
-  ADD COLUMN IF NOT EXISTS judge_player_id uuid;
+  ADD COLUMN IF NOT EXISTS judge_player_id uuid,
+  ADD COLUMN IF NOT EXISTS finished_at timestamptz;
 
-ALTER TABLE rooms DROP CONSTRAINT IF EXISTS rooms_code_key;
-CREATE UNIQUE INDEX IF NOT EXISTS rooms_active_code_unique
-  ON rooms (code) WHERE status <> 'finished';
+UPDATE rooms SET finished_at = now() WHERE status = 'finished' AND finished_at IS NULL;
 
 ALTER TABLE played_cards
   ADD COLUMN IF NOT EXISTS round_number integer NOT NULL DEFAULT 1,
@@ -48,15 +47,16 @@ CREATE TABLE IF NOT EXISTS cunadometro_rooms (
   round_number integer NOT NULL DEFAULT 0,
   rounds_limit integer NOT NULL DEFAULT 10 CHECK (rounds_limit IN (5, 10, 20)),
   game_stage varchar(30) NOT NULL DEFAULT 'lobby',
+  finished_at timestamptz,
   created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-ALTER TABLE cunadometro_rooms DROP CONSTRAINT IF EXISTS cunadometro_rooms_code_key;
-CREATE UNIQUE INDEX IF NOT EXISTS cunadometro_active_code_unique
-  ON cunadometro_rooms (code) WHERE status <> 'finished';
-
 ALTER TABLE cunadometro_rooms
-  ADD COLUMN IF NOT EXISTS game_stage varchar(30) NOT NULL DEFAULT 'legacy';
+  ADD COLUMN IF NOT EXISTS game_stage varchar(30) NOT NULL DEFAULT 'legacy',
+  ADD COLUMN IF NOT EXISTS finished_at timestamptz;
+UPDATE cunadometro_rooms
+SET finished_at = now()
+WHERE status = 'finished' AND finished_at IS NULL;
 UPDATE cunadometro_rooms SET game_stage = 'lobby' WHERE status = 'waiting' AND game_stage = 'legacy';
 ALTER TABLE cunadometro_rooms ALTER COLUMN game_stage SET DEFAULT 'lobby';
 

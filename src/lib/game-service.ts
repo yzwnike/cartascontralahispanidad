@@ -275,11 +275,14 @@ export async function createRoom(rawName: unknown): Promise<{ room: GameRoom; pl
 
   for (let attempt = 0; attempt < 50; attempt++) {
     try {
-      const activeRooms = await db<Array<{ code: string }>>`
-        SELECT code FROM rooms WHERE status <> 'finished'
-      `;
-      const code = newCode(activeRooms.map((room) => room.code));
+      let code = '';
       await db.begin(async (tx) => {
+        await tx`
+          DELETE FROM rooms
+          WHERE status = 'finished' AND finished_at < now() - interval '24 hours'
+        `;
+        const existingRooms = await tx<Array<{ code: string }>>`SELECT code FROM rooms`;
+        code = newCode(existingRooms.map((room) => room.code));
         const [black] = await tx<Array<{ id: number }>>`
           SELECT id FROM cards WHERE type = 'black' ORDER BY random() LIMIT 1
         `;
@@ -825,7 +828,7 @@ export async function castVote(rawCode: string, rawPlayerId: string, rawSubmissi
         await tx`UPDATE players SET score = score + 1 WHERE id = ${winner.player_id}`;
       }
       if (room.round_number >= room.rounds_limit) {
-        await tx`UPDATE rooms SET status = 'finished' WHERE id = ${room.id}`;
+        await tx`UPDATE rooms SET status = 'finished', finished_at = now() WHERE id = ${room.id}`;
       } else if (voteNumber === 2) {
         await tx`UPDATE rooms SET status = 'judging' WHERE id = ${room.id}`;
       }
