@@ -13,10 +13,16 @@ import {
   type CunadometroSession,
 } from '../lib/cunadometro';
 import { duelsPerPlayer, totalGameRounds } from '../lib/cunadometro-length';
+import {
+  ANSWER_REVEAL_DURATION_MS,
+  getAnswerRevealStart,
+  getRevealVoteDelay,
+  REVEAL_PROMPT_DURATION_MS,
+  REVEAL_BOARD_TRANSITION_MS,
+} from '../lib/cunadometro-reveal';
 import { GameApiError } from '../lib/game';
 
 const SESSION_KEY = 'cunadometro-session';
-const DUEL_REVEAL_DURATION_MS = 6100;
 
 function getStoredSessionCredentials(value: unknown) {
   if (!value || typeof value !== 'object') return null;
@@ -51,21 +57,21 @@ export default function CunadometroApp() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
-  const promptRef = useRef<HTMLElement | null>(null);
+  const revealSplashRef = useRef<HTMLDivElement | null>(null);
+  const revealBoardRef = useRef<HTMLDivElement | null>(null);
   const answerRefs = useRef(new Map<string, HTMLButtonElement>());
   const scoreStripRef = useRef<HTMLElement | null>(null);
   const phaseBannerRef = useRef<HTMLDivElement | null>(null);
   const duelTaskListRef = useRef<HTMLDivElement | null>(null);
+  const revealClockRef = useRef<{ key: string; startedAt: number } | null>(null);
 
   const me = room?.players.find((player) => player.id === session?.playerId);
   const activePlayers = room?.players.filter((player) => player.isActive) ?? [];
   const round = room?.round ?? null;
   const inDuel = round?.mode === 'duel' && Boolean(session && round.duelPlayerIds.includes(session.playerId));
   const hasAnswered = Boolean(round?.myAnswerId);
-  const revealDelay = round?.mode === 'duel'
-    ? DUEL_REVEAL_DURATION_MS
-    : Math.max(1500, (round?.answers.length ?? 0) * 180 + 900);
-  const revealReady = revealElapsed >= revealDelay + 500;
+  const revealDelay = round ? getRevealVoteDelay(round.mode, round.answers.length) : 0;
+  const revealReady = revealElapsed >= revealDelay;
   const canAnswer = round?.status === 'answering' && (round.mode === 'all_play' || inDuel) && !hasAnswered;
   const canVote = round?.status === 'voting'
     && revealReady
@@ -132,50 +138,80 @@ export default function CunadometroApp() {
 
   useEffect(() => {
     if (!round?.revealStartedAt || round.status !== 'voting') {
+      revealClockRef.current = null;
       setRevealElapsed(0);
       return;
     }
-    const revealAt = new Date(round.revealStartedAt).getTime();
+    const revealAt = getLocalRevealStart(round.number, round.revealStartedAt);
     const updateElapsed = () => setRevealElapsed(Math.max(0, Date.now() - revealAt));
     updateElapsed();
     const timer = window.setInterval(updateElapsed, 100);
     return () => window.clearInterval(timer);
   }, [round?.number, round?.revealStartedAt, round?.status]);
 
+  function getLocalRevealStart(roundNumber: number, revealStartedAt: string) {
+    const key = `${roundNumber}:${revealStartedAt}`;
+    if (revealClockRef.current?.key !== key) {
+      revealClockRef.current = {
+        key,
+        startedAt: Date.now(),
+      };
+    }
+    return revealClockRef.current.startedAt;
+  }
+
   useLayoutEffect(() => {
-    if (!round?.revealStartedAt || round.status !== 'voting' || !promptRef.current) return;
-    const elapsed = Math.max(0, (Date.now() - new Date(round.revealStartedAt).getTime()) / 1000);
-    const isDuel = round.mode === 'duel';
-    const promptLiftAt = isDuel ? 2.65 : 0.95;
-    const firstAnswerAt = isDuel ? 3.35 : 1.45;
-    const answerGap = isDuel ? 2 : 0.18;
+    if (
+      !round?.revealStartedAt
+      || round.status !== 'voting'
+      || !revealSplashRef.current
+      || !revealBoardRef.current
+    ) return;
+    const elapsed = Math.max(0, (Date.now() - getLocalRevealStart(round.number, round.revealStartedAt)) / 1000);
+    const promptDuration = REVEAL_PROMPT_DURATION_MS / 1000;
+    const boardVisible = elapsed >= promptDuration;
     const context = gsap.context(() => {
+      gsap.set(revealBoardRef.current, { autoAlpha: boardVisible ? 1 : 0, y: boardVisible ? 0 : 16 });
+      gsap.set(revealSplashRef.current, { autoAlpha: boardVisible ? 0 : 1, scale: boardVisible ? 1 : 1 });
       const timeline = gsap.timeline();
-      timeline.to(promptRef.current, {
-        y: -28,
-        scale: 0.94,
-        rotateX: 5,
-        opacity: 0.68,
-        duration: 0.72,
-        ease: 'back.in(1.35)',
-      }, Math.max(0, promptLiftAt - elapsed));
+      if (!boardVisible) {
+        const transitionAt = Math.max(0, promptDuration - elapsed);
+        timeline.to(revealSplashRef.current, {
+          autoAlpha: 0,
+          scale: 1.04,
+          duration: REVEAL_BOARD_TRANSITION_MS / 1000,
+          ease: 'power2.in',
+        }, transitionAt);
+        timeline.to(revealBoardRef.current, {
+          autoAlpha: 1,
+          y: 0,
+          duration: REVEAL_BOARD_TRANSITION_MS / 1000,
+          ease: 'back.out(1.3)',
+        }, transitionAt);
+      }
       round.answers.forEach((answer, index) => {
         const element = answerRefs.current.get(answer.id);
         if (!element) return;
+        const revealAtMs = getAnswerRevealStart(round.mode, index);
+        const revealAt = revealAtMs / 1000;
+        if (elapsed * 1000 >= revealAtMs + ANSWER_REVEAL_DURATION_MS) {
+          gsap.set(element, { autoAlpha: 1, y: 0, scale: 1, rotate: round.mode === 'duel' ? (index === 0 ? -3 : 3) : 0 });
+          return;
+        }
         timeline.fromTo(element, {
           autoAlpha: 0,
-          y: 34,
-          scale: 0.82,
-          rotate: index % 2 === 0 ? -3 : 3,
-          transformOrigin: '50% 100%',
+          y: 90,
+          scale: 0.72,
+          rotate: index % 2 === 0 ? -7 : 7,
+          transformOrigin: '50% 80%',
         }, {
           autoAlpha: 1,
           y: 0,
           scale: 1,
-          rotate: 0,
-          duration: 0.62,
-          ease: 'back.out(1.7)',
-        }, Math.max(0, firstAnswerAt + index * answerGap - elapsed));
+          rotate: round.mode === 'duel' ? (index === 0 ? -3 : 3) : 0,
+          duration: ANSWER_REVEAL_DURATION_MS / 1000,
+          ease: 'back.out(1.8)',
+        }, Math.max(0, revealAt - elapsed));
       });
     });
     return () => context.revert();
@@ -558,7 +594,15 @@ export default function CunadometroApp() {
   }
 
   return (
-    <main className="cu-app cu-room-view cu-playing">
+    <main className={`cu-app cu-room-view cu-playing${round.status === 'voting' ? ' cu-reveal-mode' : ''}`}>
+      {round.status === 'voting' && (
+        <div className="cu-reveal-splash" ref={revealSplashRef} aria-live="polite">
+          <span>RONDA {String(round.number).padStart(2, '0')} · {round.mode === 'duel' ? 'DUELO' : 'TODO EL GRUPO JUEGA'}</span>
+          <h1>{round.prompt}</h1>
+          <i>PREPARADOS...</i>
+        </div>
+      )}
+      <div className="cu-reveal-board" ref={revealBoardRef}>
       <header className="cu-game-header">
         <a className="cu-mini-logo" href="/">CUÑA<span>✳</span></a>
         <button className="cu-code-pill" onClick={() => void copyRoomCode()}>{copied ? 'COPIADO' : room.code}</button>
@@ -577,7 +621,7 @@ export default function CunadometroApp() {
             <i>VS</i>
           </div>
         )}
-        <article className="cu-prompt" ref={promptRef} key={`${round.number}-${round.prompt}`}>
+        <article className="cu-prompt" key={`${round.number}-${round.prompt}`}>
           <span>CONSIGNA {String(round.number).padStart(2, '0')}</span>
           <h1>{round.prompt}</h1>
         </article>
@@ -607,7 +651,7 @@ export default function CunadometroApp() {
               <strong>{revealReady ? (round.mode === 'duel' ? 'EL PÚBLICO DECIDE' : 'VOTA LA MÁS BRILLANTE') : 'ATENCIÓN, SALEN LAS RESPUESTAS'}</strong>
               <span>{round.answers.length} RESPUESTAS</span>
             </div>
-            <div className="cu-answers">
+            <div className={`cu-answers${round.mode === 'duel' ? ' is-duel' : ''}`}>
               {round.answers.map((answer, index) => {
                 const isMine = round.myAnswerId === answer.id;
                 return (
@@ -667,6 +711,7 @@ export default function CunadometroApp() {
         {activePlayers.map((player, index) => <div key={player.id}><span className={`cu-avatar cu-avatar-${index % 4}`}>{player.name.charAt(0)}</span><span>{player.name}{player.id === me.id ? ' (tú)' : ''}</span><b>{player.score}</b></div>)}
       </section>
       <footer className="cu-footer"><span>PARTIDA EN CURSO</span><span>CONSIGNA ORIGINAL · MADE BY YAZAWA</span></footer>
+      </div>
     </main>
   );
 }

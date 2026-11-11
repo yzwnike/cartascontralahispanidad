@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Press+Start+2P&family=Space+Grotesk:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Press+Start+2P&family=Roboto+Slab:wght@600;700;800&family=Space+Grotesk:wght@400;500;600;700;800&display=swap');
 
 .cu-app {
   --cu-bg: #070a09;
@@ -459,4 +459,285 @@ button.cu-answer-card:enabled:hover { transform: translate(-2px, -2px) rotate(-.
   .cu-app *,
   .cu-app *::before,
   .cu-app *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+}
+.cu-app.cu-reveal-mode {
+  --cu-lime: #b6ef67;
+  min-height: 100svh;
+  max-width: none;
+  margin: 0;
+  padding: 14px clamp(14px, 4vw, 56px);
+  overflow: visible;
+  background:
+    radial-gradient(ellipse at 50% 46%, rgba(181, 216, 112, .22), transparent 58%),
+    linear-gradient(135deg, #667f42, #506a35 54%, #3b522b);
+}
+.cu-reveal-mode::before {
+  position: fixed;
+  opacity: .27;
+  background-image:
+    repeating-conic-gradient(from 13deg at 50% 48%, rgba(217, 246, 157, .08) 0deg 5deg, transparent 7deg 17deg),
+    repeating-radial-gradient(ellipse at 50% 48%, transparent 0 25px, rgba(33, 48, 23, .17) 27px 30px, transparent 32px 48px);
+  background-size: auto;
+  mask-image: radial-gradient(ellipse at center, #000 8%, transparent 82%);
+  animation: cu-swirl-drift 48s linear infinite;
+}
+.cu-reveal-mode::after { opacity: .07; }
+.cu-reveal-mode .cu-reveal-board {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-height: calc(100svh - 28px);
+  flex-direction: column;
+  opacity: 0;
+  visibility: hidden;
+}
+.cu-reveal-mode .cu-game-header { min-height: 42px; }
+.cu-reveal-mode .cu-mini-logo { color: #f3f5e8; }
+.cu-reveal-mode .cu-code-pill,
+.cu-reveal-mode .cu-exit {
+  border-color: rgba(23, 31, 17, .45);
+  color: #f1f5e6;
+  background: rgba(27, 38, 19, .45);
+}
+.cu-reveal-mode .cu-round-count { color: #e5f6bd; }
+.cu-reveal-mode .cu-progress { background: rgba(23, 34, 17, .3); }
+.cu-reveal-mode .cu-progress span { background: #d7ff8b; box-shadow: 0 0 15px rgba(216, 255, 139, .75); }
+.cu-reveal-mode .cu-play-area {
+  display: flex;
+  width: min(100%, 1120px);
+  max-width: 1120px;
+  min-height: calc(100svh - 152px);
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  margin: 0 auto;
+}
+.cu-reveal-mode .cu-mode-label {
+  color: #f1f6df;
+  text-shadow: 0 2px 2px rgba(20, 32, 13, .45);
+}
+.cu-reveal-mode .mode-mark {
+  border-color: #192214;
+  color: #182110;
+  background: #c9fb7d;
+  box-shadow: 3px 3px 0 rgba(26, 37, 17, .55);
+}
+.cu-reveal-mode .cu-duelists { color: #f5f8e9; text-shadow: 0 2px 2px rgba(20, 32, 13, .45); }
+.cu-reveal-mode .cu-duelists i { color: #172010; }
+.cu-reveal-mode .cu-prompt {
+  margin: clamp(5px, 1.4vh, 15px) 0 clamp(8px, 2vh, 22px);
+  padding: 0 clamp(4px, 5vw, 70px);
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: center;
+}
+.cu-reveal-mode .cu-prompt::after,
+.cu-reveal-mode .cu-prompt>span { display: none; }
+.cu-reveal-mode .cu-prompt h1 {
+  max-width: 1050px;
+  margin: 0 auto;
+  color: #c8f477;
+  font: 800 clamp(25px, 4.2vw, 54px)/1.13 'Roboto Slab', Rockwell, Georgia, serif;
+  letter-spacing: -.025em;
+  text-shadow: 0 4px 0 #182110, 0 6px 0 rgba(18, 26, 13, .42);
+}
+.cu-reveal-mode .cu-stage-heading {
+  margin: 0 0 clamp(7px, 1.3vh, 14px);
+  color: #f4f8e9;
+  text-shadow: 0 2px 2px rgba(20, 32, 13, .45);
+}
+.cu-reveal-mode .cu-stage-heading span { color: #e1efc9; }
+.cu-reveal-mode .cu-answers {
+  position: relative;
+  display: grid;
+  width: 100%;
+  flex: 1;
+  align-content: center;
+  align-items: center;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(12px, 5vw, 76px);
+  padding: 4px clamp(3px, 1.5vw, 20px);
+}
+.cu-reveal-mode .cu-answer-card {
+  display: flex;
+  width: 100%;
+  min-height: clamp(225px, 34vh, 370px);
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  padding: clamp(18px, 4vw, 48px);
+  border: 4px solid #171717;
+  color: #111;
+  background: #f6f3eb;
+  box-shadow: 9px 10px 0 rgba(19, 23, 15, .82);
+  text-align: center;
+}
+.cu-reveal-mode .cu-answer-card:nth-child(odd) { transform: rotate(-2.2deg); }
+.cu-reveal-mode .cu-answer-card:nth-child(even) { transform: rotate(2.2deg); }
+.cu-reveal-mode .cu-answer-card small {
+  color: #536341;
+  font-size: 9px;
+  letter-spacing: .14em;
+}
+.cu-reveal-mode .cu-answer-card strong {
+  flex: 0 1 auto;
+  color: #141414;
+  font: 700 clamp(21px, 3.2vw, 39px)/1.2 'Trebuchet MS', 'Comic Sans MS', sans-serif;
+  overflow-wrap: anywhere;
+}
+.cu-reveal-mode .cu-answer-card>span {
+  color: #415b2a;
+  font-size: 9px;
+  font-weight: 700;
+}
+.cu-reveal-mode button.cu-answer-card:enabled:hover {
+  border-color: #171717;
+  background: #fffdf6;
+  box-shadow: 11px 13px 0 rgba(19, 23, 15, .78);
+}
+.cu-reveal-mode .cu-answer-card.is-voted {
+  outline: 5px solid #c8f477;
+  outline-offset: 3px;
+}
+.cu-reveal-mode .cu-answer-card.is-own-answer {
+  background: #e4e6d9;
+}
+.cu-reveal-mode .cu-answers.is-duel::before {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: clamp(54px, 7vw, 82px);
+  aspect-ratio: 1;
+  place-items: center;
+  border: 6px solid #171717;
+  border-radius: 50%;
+  color: #172110;
+  background: #c8f477;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, .22);
+  content: 'VS';
+  font: 800 clamp(12px, 1.6vw, 18px) 'Press Start 2P', monospace;
+  transform: translate(-50%, -50%) rotate(-7deg);
+}
+.cu-reveal-mode .cu-vote-note {
+  min-height: 0;
+  align-self: center;
+  margin: clamp(7px, 1.4vh, 14px) 0;
+  padding: 7px 12px;
+  color: #f0f5e4;
+  background: rgba(24, 35, 17, .45);
+  font-size: 10px;
+  text-align: center;
+}
+.cu-reveal-mode .cu-score-strip {
+  max-width: 100%;
+  margin: 0 auto;
+}
+.cu-reveal-mode .cu-score-strip>div {
+  border-color: rgba(241, 247, 224, .24);
+  color: #f3f6e8;
+  background: rgba(26, 37, 18, .4);
+}
+.cu-reveal-mode .cu-score-strip b { color: #d6ff92; }
+.cu-reveal-mode .cu-footer {
+  margin-top: 5px;
+  border-color: rgba(241, 247, 224, .2);
+  color: rgba(241, 247, 224, .72);
+}
+.cu-reveal-splash {
+  position: fixed;
+  z-index: 10;
+  inset: 0;
+  display: flex;
+  width: auto;
+  min-height: 100vh;
+  min-height: 100svh;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(18px, 4vh, 42px);
+  overflow: hidden;
+  padding: max(24px, env(safe-area-inset-top)) clamp(18px, 6vw, 90px) max(24px, env(safe-area-inset-bottom));
+  isolation: isolate;
+  color: #f8f9eb;
+  background:
+    radial-gradient(ellipse at 50% 46%, rgba(181, 216, 112, .22), transparent 58%),
+    linear-gradient(135deg, #667f42, #506a35 54%, #3b522b);
+  text-align: center;
+}
+.cu-reveal-splash::before {
+  position: absolute;
+  z-index: -1;
+  inset: -18%;
+  content: '';
+  opacity: .42;
+  background-image:
+    repeating-conic-gradient(from 13deg at 50% 48%, rgba(217, 246, 157, .1) 0deg 5deg, transparent 7deg 17deg),
+    repeating-radial-gradient(ellipse at 50% 48%, transparent 0 25px, rgba(33, 48, 23, .18) 27px 30px, transparent 32px 48px);
+  mask-image: radial-gradient(ellipse at center, #000 8%, transparent 82%);
+  animation: cu-swirl-drift 48s linear infinite;
+}
+.cu-reveal-splash>span {
+  position: absolute;
+  top: max(22px, env(safe-area-inset-top));
+  left: clamp(18px, 3vw, 40px);
+  color: rgba(244, 249, 226, .86);
+  font: 700 10px 'DM Mono', monospace;
+  letter-spacing: .12em;
+}
+.cu-reveal-splash h1 {
+  width: min(100%, 1240px);
+  margin: 0;
+  color: #c8f477;
+  font: 800 clamp(30px, 7.3vw, 96px)/1.14 'Roboto Slab', Rockwell, Georgia, serif;
+  letter-spacing: -.025em;
+  overflow-wrap: anywhere;
+  text-shadow: 0 5px 0 #182110, 0 8px 0 rgba(18, 26, 13, .42), 0 0 30px rgba(205, 255, 134, .16);
+}
+.cu-reveal-splash>i {
+  position: absolute;
+  bottom: max(25px, env(safe-area-inset-bottom));
+  color: rgba(245, 249, 231, .75);
+  font: normal 12px 'DM Mono', monospace;
+  letter-spacing: .15em;
+  animation: cu-blink 1.1s steps(2) infinite;
+}
+@keyframes cu-swirl-drift { to { transform: rotate(360deg) scale(1.04); } }
+html:has(.cu-reveal-splash),
+body:has(.cu-reveal-splash) {
+  scrollbar-width: none;
+}
+html:has(.cu-reveal-splash)::-webkit-scrollbar,
+body:has(.cu-reveal-splash)::-webkit-scrollbar { display: none; }
+@media (max-width: 560px) {
+  .cu-reveal-mode { padding: 10px 12px max(10px, env(safe-area-inset-bottom)); }
+  .cu-reveal-mode .cu-reveal-board { min-height: calc(100svh - 20px); }
+  .cu-reveal-mode .cu-game-header { gap: 6px; }
+  .cu-reveal-mode .cu-mini-logo { font-size: 9px; }
+  .cu-reveal-mode .cu-code-pill { padding: 6px 7px; font-size: 7px; }
+  .cu-reveal-mode .cu-round-count { font-size: 11px; }
+  .cu-reveal-mode .cu-exit { min-height: 28px; padding: 0 7px; }
+  .cu-reveal-mode .cu-play-area { min-height: calc(100svh - 142px); }
+  .cu-reveal-mode .cu-prompt { padding: 0 2px; }
+  .cu-reveal-mode .cu-prompt h1 { font-size: clamp(22px, 6.2vw, 34px); }
+  .cu-reveal-mode .cu-answers { gap: 10px; padding: 4px 2px; }
+  .cu-reveal-mode .cu-answer-card {
+    min-height: clamp(205px, 32vh, 290px);
+    gap: 8px;
+    padding: 16px 10px;
+    border-width: 3px;
+    box-shadow: 5px 6px 0 rgba(19, 23, 15, .82);
+  }
+  .cu-reveal-mode .cu-answer-card strong { font-size: clamp(17px, 5vw, 23px); }
+  .cu-reveal-mode .cu-answer-card small { font-size: 7px; }
+  .cu-reveal-mode .cu-answer-card>span { font-size: 7px; }
+  .cu-reveal-mode .cu-answers.is-duel::before { border-width: 4px; }
+  .cu-reveal-mode .cu-score-strip { gap: 5px; }
+  .cu-reveal-mode .cu-score-strip>div { gap: 4px; padding: 4px 6px; font-size: 7px; }
+  .cu-reveal-mode .cu-score-strip .cu-avatar { width: 18px; height: 18px; }
+  .cu-reveal-splash { gap: 24px; padding-right: 20px; padding-left: 20px; }
+  .cu-reveal-splash h1 { font-size: clamp(31px, 9.5vw, 54px); }
 }

@@ -5,6 +5,7 @@ import { GameServiceError } from './game-errors';
 import type { CunadometroMode, CunadometroPhase, CunadometroRoom, CunadometroStage } from './cunadometro';
 import { createPlayerToken } from './player-auth';
 import type { GameLength } from './cunadometro-length';
+import { getRevealVoteDelay } from './cunadometro-reveal';
 import { createGameSchedule } from './cunadometro-schedule';
 
 const CODE_CHARACTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -624,9 +625,15 @@ export async function voteCunadometroAnswer(rawCode: string, rawPlayerId: string
           SELECT count(*)::int AS count FROM cunadometro_answers
           WHERE room_id = ${room.id} AND round_number = ${room.round_number}
         `;
-        const revealDelay = round.mode === 'duel' ? 6100 : Math.max(1500, answerCount.count * 180 + 900);
-        const elapsed = Date.now() - new Date(round.reveal_started_at).getTime();
-        if (elapsed < revealDelay) throw new GameServiceError('Espera a que se revelen todas las respuestas.', 409);
+        const revealDelay = getRevealVoteDelay(round.mode, answerCount.count);
+        const [revealClock] = await tx<Array<{ elapsed_ms: number }>>`
+          SELECT floor(extract(epoch FROM (now() - reveal_started_at)) * 1000)::int AS elapsed_ms
+          FROM cunadometro_rounds
+          WHERE room_id = ${room.id} AND round_number = ${room.round_number}
+        `;
+        if (revealClock.elapsed_ms < revealDelay) {
+          throw new GameServiceError('Espera a que se revelen todas las respuestas.', 409);
+        }
       }
       const [voter] = await tx<Array<{ id: string }>>`
         SELECT id FROM cunadometro_players
