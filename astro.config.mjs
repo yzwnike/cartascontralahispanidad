@@ -6,4 +6,9 @@ export default defineConfig({
   output: 'server',
   adapter: vercel(),
   integrations: [react()],
+  vite: {
+    ssr: {
+      noExternal: ['gsap'],
+    },
+  },
 });
