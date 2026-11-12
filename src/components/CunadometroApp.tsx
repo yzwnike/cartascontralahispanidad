@@ -524,6 +524,10 @@ export default function CunadometroApp() {
   const title = round.mode === 'duel' ? 'DUELO ALEATORIO' : 'TODO EL GRUPO JUEGA';
   const answerLength = answerText.trim().length;
   const isDuelAnswerPhase = room.gameStage === 'opening_answers' || room.gameStage === 'closing_answers';
+  const roundWinnerNames = Array.from(new Set(round.answers
+    .filter((answer) => answer.isWinner)
+    .map((answer) => room.players.find((player) => player.id === answer.playerId)?.name)
+    .filter((winnerName): winnerName is string => Boolean(winnerName))));
 
   if (isDuelAnswerPhase) {
     const allMyTasksSent = round.myDuelTasks.length > 0 && round.myDuelTasks.every((task) => task.answerText !== null);
@@ -686,8 +690,12 @@ export default function CunadometroApp() {
 
         {round.status === 'resolved' && (
           <>
-            <div className="cu-stage-heading"><strong>EL GRUPO HA HABLADO</strong><span>VOTOS REVELADOS</span></div>
-            <div className={`cu-answers${round.mode === 'duel' ? ' is-duel' : ''}`}>
+            <div className="cu-stage-heading"><strong>{round.mode === 'duel' ? 'EL GRUPO HA HABLADO' : 'RESULTADO DE LA GENERAL'}</strong><span>VOTOS REVELADOS</span></div>
+            <div className={`cu-result-winner${roundWinnerNames.length > 1 ? ' is-tie' : ''}`} role="status">
+              <span>{roundWinnerNames.length > 1 ? '✦ EMPATE' : '✦ GANADORA DE LA VOTACIÓN'}</span>
+              <strong>{roundWinnerNames.join(' · ')}</strong>
+            </div>
+            <div className={`cu-answers${round.mode === 'duel' ? ' is-duel' : ' is-general'}`}>
               {round.answers.map((answer, index) => {
                 const author = room.players.find((player) => player.id === answer.playerId);
                 const votes = round.voteCounts[answer.id] ?? 0;
@@ -701,7 +709,7 @@ export default function CunadometroApp() {
               })}
             </div>
             {me.isHost
-              ? <button className="cu-primary cu-next" disabled={pending} onClick={() => void perform(() => nextCunadometroRound(room.code, me.id, session.playerToken))}>{round.number === room.roundsLimit ? 'VER CLASIFICACIÓN' : 'SIGUIENTE RONDA'} <span>→</span></button>
+              ? <button className="cu-primary cu-next" disabled={pending} onClick={() => void perform(() => nextCunadometroRound(room.code, me.id, session.playerToken))}>{round.phase === 'middle_general' ? 'VER MARCADOR' : round.phase === 'final_general' || round.number === room.roundsLimit ? 'VER CLASIFICACIÓN' : 'SIGUIENTE RONDA'} <span>→</span></button>
               : <p className="cu-wait-note"><i></i> Esperando a que el anfitrión pase de ronda…</p>}
           </>
         )}

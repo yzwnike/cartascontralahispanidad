@@ -65,7 +65,7 @@ async function reassignUnansweredDuels(
   `;
 }
 
-async function resolveRound(tx: Transaction, roomId: string, roundNumber: number, phase: CunadometroPhase) {
+async function resolveRound(tx: Transaction, roomId: string, roundNumber: number) {
   const tallies = await tx<Array<{ player_id: string; vote_count: number }>>`
     SELECT a.player_id, count(v.answer_id)::int AS vote_count
     FROM cunadometro_answers a
@@ -90,15 +90,6 @@ async function resolveRound(tx: Transaction, roomId: string, roundNumber: number
     UPDATE cunadometro_rounds SET status = 'resolved'
     WHERE room_id = ${roomId} AND round_number = ${roundNumber}
   `;
-  if (phase === 'middle_general') {
-    await tx`UPDATE cunadometro_rooms SET game_stage = 'middle_ranking' WHERE id = ${roomId}`;
-  } else if (phase === 'final_general') {
-    await tx`
-      UPDATE cunadometro_rooms
-      SET game_stage = 'final_ranking', status = 'finished', finished_at = now()
-      WHERE id = ${roomId}
-    `;
-  }
 }
 
 function shufflePrompts(prompts: string[]) {
@@ -688,7 +679,7 @@ export async function voteCunadometroAnswer(rawCode: string, rawPlayerId: string
       `;
       if (voteCount.count !== eligibleCount) return;
 
-      await resolveRound(tx, room.id, room.round_number, round.phase);
+      await resolveRound(tx, room.id, room.round_number);
     });
     return getCunadometroRoom(code, rawPlayerId);
   } catch (error) {
@@ -739,6 +730,18 @@ export async function nextCunadometroRound(rawCode: string, rawPlayerId: string)
           SELECT phase FROM cunadometro_rounds
           WHERE room_id = ${room.id} AND round_number = ${room.round_number}
         `;
+        if (current.phase === 'middle_general') {
+          await tx`UPDATE cunadometro_rooms SET game_stage = 'middle_ranking' WHERE id = ${room.id}`;
+          return;
+        }
+        if (current.phase === 'final_general') {
+          await tx`
+            UPDATE cunadometro_rooms
+            SET game_stage = 'final_ranking', status = 'finished', finished_at = now()
+            WHERE id = ${room.id}
+          `;
+          return;
+        }
         if (current.phase !== 'opening_duels' && current.phase !== 'closing_duels') {
           throw new GameServiceError('No hay otra ronda de duelos que avanzar.', 409);
         }
@@ -935,7 +938,7 @@ export async function leaveCunadometroRoom(rawCode: string, rawPlayerId: string)
           WHERE room_id = ${room.id} AND round_number = ${room.round_number}
         `;
         if (voteCount.count === eligibleCount) {
-          await resolveRound(tx, room.id, room.round_number, round.phase);
+          await resolveRound(tx, room.id, room.round_number);
         }
       }
     });
